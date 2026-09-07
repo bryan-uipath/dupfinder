@@ -30,7 +30,7 @@ pub fn run(
     let globs = crate::build_globs(excludes)?;
     let allowed =
         |file: &str| !globs.is_match(file) && (include_tests || !extract::is_test_file(file));
-    let mut ex = extract::extract_structural(root)?;
+    let mut ex = extract::extract_structural(root, true, true)?;
     ex.fns.retain(|r| !globs.is_match(&r.file));
     ex.types.retain(|r| !globs.is_match(&r.file));
     ex.blocks.retain(|r| !globs.is_match(&r.file));
@@ -80,7 +80,7 @@ pub fn run(
             0.0,
         );
     }
-    for p in blocks::pairs(&ex.blocks, 20, include_tests) {
+    for p in blocks::pairs(&ex.blocks, 20, include_tests, usize::MAX).1 {
         add(
             site(&p.a.file, p.a.start, p.a.end),
             site(&p.b.file, p.b.start, p.b.end),

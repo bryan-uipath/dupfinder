@@ -76,7 +76,8 @@ pub fn run(
             score,
         );
     }
-    for family in bodies::families(&ex, 30, include_tests) {
+    for mut family in bodies::families(&ex, 30, include_tests) {
+        family.sort_by_key(|r| std::cmp::Reverse(r.end - r.start));
         for (a, b) in links(&family, |a, b| bodies::overlaps(a, b)) {
             let fn_site = |r: &extract::FnRecord| Site {
                 file: r.file.clone(),
@@ -87,7 +88,8 @@ pub fn run(
             add(fn_site(family[a]), fn_site(family[b]), "body", 0.0);
         }
     }
-    for family in blocks::families(&ex.blocks, 20, include_tests) {
+    for mut family in blocks::families(&ex.blocks, 20, include_tests) {
+        family.sort_by_key(|r| std::cmp::Reverse(r.end - r.start));
         for (a, b) in links(&family, |a, b| blocks::overlaps(a, b)) {
             let block_site = |b: &blocks::Block| Site {
                 file: b.file.clone(),
@@ -318,6 +320,17 @@ mod tests {
             name_score: 0.5,
             fragments: vec![],
         }
+    }
+
+    #[test]
+    fn longest_first_links_preserve_family_rank() {
+        let mut lengths = vec![1, 100, 90];
+        lengths.sort_by_key(|n| std::cmp::Reverse(*n));
+        let found = links(&lengths, |_, _| false);
+        assert_eq!(
+            found.iter().map(|&(a, b)| lengths[a].min(lengths[b])).max(),
+            Some(90)
+        );
     }
 
     #[test]

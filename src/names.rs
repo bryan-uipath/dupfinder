@@ -240,6 +240,33 @@ pub fn audit_score(a: &Candidate, b: &Candidate, idf: &Idf) -> (f32, f32, f32) {
     (raw * idf.shared_specificity(&a.name_tokens, &b.name_tokens), n, t)
 }
 
+pub fn audit_pairs(all: &[Candidate], min_score: f32, include_tests: bool) -> Vec<(f32, f32, f32, &Candidate, &Candidate)> {
+    let idf = Idf::build(all);
+    let pool: Vec<&Candidate> = all
+        .iter()
+        .filter(|c| (include_tests || !c.testish) && !c.delegating)
+        .collect();
+
+    let mut pairs: Vec<(f32, f32, f32, &Candidate, &Candidate)> = Vec::new();
+    for (i, a) in pool.iter().enumerate() {
+        for b in &pool[i + 1..] {
+            // Overlapping ranges in one file = nested item, not a pair.
+            if a.file == b.file && a.start <= b.end && b.start <= a.end {
+                continue;
+            }
+            if structurally_forced(a, b) {
+                continue;
+            }
+            let (s, n, t) = audit_score(a, b, &idf);
+            if s >= min_score {
+                pairs.push((s, n, t, a, b));
+            }
+        }
+    }
+    pairs.sort_by(|x, y| y.0.total_cmp(&x.0));
+    pairs
+}
+
 pub fn candidates(ex: &Extraction) -> Vec<Candidate> {
     let mut out = Vec::with_capacity(ex.fns.len() + ex.types.len());
     for r in &ex.fns {

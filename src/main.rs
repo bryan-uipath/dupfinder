@@ -9,6 +9,7 @@ mod clones;
 mod normalized;
 mod bodies;
 mod blocks;
+mod audit;
 mod extract;
 mod gitdiff;
 mod names;
@@ -60,6 +61,20 @@ enum Cmd {
         path: PathBuf,
         #[arg(long, default_value_t = 20)]
         min_tokens: usize,
+        #[arg(long, default_value_t = 40)]
+        top: usize,
+        #[arg(long)]
+        include_tests: bool,
+        #[arg(long = "exclude")]
+        excludes: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Group and rank name, body, block, and token-clone evidence
+    Audit {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Maximum cleanup groups to display
         #[arg(long, default_value_t = 40)]
         top: usize,
         #[arg(long)]
@@ -171,6 +186,8 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Audit { path, top, include_tests, excludes, json } =>
+            audit::run(&path, top, include_tests, &excludes, json),
         Cmd::Names {
             path,
             base,
@@ -399,31 +416,10 @@ fn build_globs(patterns: &[String]) -> Result<globset::GlobSet> {
 
 /// Whole-repo audit: every unordered pair once, ranked by IDF-damped score.
 fn audit_repo(all: &[names::Candidate], top: usize, min_score: f32, include_tests: bool) -> Result<()> {
-    let idf = names::Idf::build(all);
-    let pool: Vec<&names::Candidate> = all
-        .iter()
-        .filter(|c| (include_tests || !c.testish) && !c.delegating)
-        .collect();
+    let pool = all.iter().filter(|c| (include_tests || !c.testish) && !c.delegating).count();
+    let pairs = names::audit_pairs(all, min_score, include_tests);
 
-    let mut pairs: Vec<(f32, f32, f32, &names::Candidate, &names::Candidate)> = Vec::new();
-    for (i, a) in pool.iter().enumerate() {
-        for b in &pool[i + 1..] {
-            // Overlapping ranges in one file = nested item, not a pair.
-            if a.file == b.file && a.start <= b.end && b.start <= a.end {
-                continue;
-            }
-            if names::structurally_forced(a, b) {
-                continue;
-            }
-            let (s, n, t) = names::audit_score(a, b, &idf);
-            if s >= min_score {
-                pairs.push((s, n, t, a, b));
-            }
-        }
-    }
-    pairs.sort_by(|x, y| y.0.total_cmp(&x.0));
-
-    println!("# lexical duplication audit ({} candidates, {} pair(s) over {min_score})\n", pool.len(), pairs.len());
+    println!("# lexical duplication audit ({} candidates, {} pair(s) over {min_score})\n", pool, pairs.len());
     println!("Score = name/type Jaccard damped by how distinctive the shared words are, so `new` vs `new` sinks and `get_half_pixel` vs `get_half_pixel` floats. Trait impls that share a method name, or just forward to another method, are excluded. Read both sides before calling anything a duplicate.\n");
     for (s, n, t, a, b) in pairs.into_iter().take(top) {
         println!("{s:.2}  [name {n:.2} / types {t:.2}]");

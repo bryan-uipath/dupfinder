@@ -42,15 +42,9 @@ pub fn pairs(
     include_tests: bool,
     limit: usize,
 ) -> (usize, Vec<BlockPair<'_>>) {
-    let mut groups: HashMap<&[String], Vec<&Block>> = HashMap::new();
-    for block in blocks {
-        if block.shape.leaves >= min_tokens && (include_tests || !is_test_file(&block.file)) {
-            groups.entry(&block.shape.tokens).or_default().push(block);
-        }
-    }
     let mut pairs = BTreeMap::new();
     let mut total = 0;
-    for records in groups.values() {
+    for records in families(blocks, min_tokens, include_tests) {
         for (i, &a) in records.iter().enumerate() {
             for &b in &records[i + 1..] {
                 if a.file != b.file || a.bytes.end <= b.bytes.start || b.bytes.end <= a.bytes.start
@@ -77,6 +71,22 @@ pub fn pairs(
         }
     }
     (total, pairs.into_values().collect())
+}
+
+pub fn families(blocks: &[Block], min_tokens: usize, include_tests: bool) -> Vec<Vec<&Block>> {
+    let mut groups: HashMap<&[String], Vec<&Block>> = HashMap::new();
+    for block in blocks {
+        if block.shape.leaves >= min_tokens && (include_tests || !is_test_file(&block.file)) {
+            groups.entry(&block.shape.tokens).or_default().push(block);
+        }
+    }
+    let mut families: Vec<_> = groups.into_values().collect();
+    families.sort_by_key(|g| (&g[0].file, g[0].bytes.start));
+    families
+}
+
+pub fn overlaps(a: &Block, b: &Block) -> bool {
+    a.file == b.file && a.bytes.start < b.bytes.end && b.bytes.start < a.bytes.end
 }
 
 pub fn location(block: &Block) -> serde_json::Value {

@@ -9,6 +9,7 @@ struct Site {
     file: String,
     start: u32,
     end: u32,
+    bytes: Option<(usize, usize)>,
 }
 
 struct Pair {
@@ -39,6 +40,7 @@ pub fn run(
         file: file.into(),
         start,
         end,
+        bytes: None,
     };
     let mut add = |a: Site, b: Site, evidence, name_score| {
         let lines = (a.end - a.start + 1).min(b.end - b.start + 1);
@@ -57,7 +59,9 @@ pub fn run(
             fragments: Vec::new(),
         });
         pair.evidence.insert(evidence);
-        pair.fragments.push(fragment);
+        if !pair.fragments.contains(&fragment) {
+            pair.fragments.push(fragment);
+        }
         if evidence != "name" {
             pair.lines = pair.lines.max(lines);
         }
@@ -72,21 +76,27 @@ pub fn run(
             score,
         );
     }
-    for p in bodies::pairs(&ex, 30, include_tests, usize::MAX).1 {
-        add(
-            site(&p.a.file, p.a.start, p.a.end),
-            site(&p.b.file, p.b.start, p.b.end),
-            "body",
-            0.0,
-        );
+    for family in bodies::families(&ex, 30, include_tests) {
+        for (a, b) in links(&family, |a, b| bodies::overlaps(a, b)) {
+            let fn_site = |r: &extract::FnRecord| Site {
+                file: r.file.clone(),
+                start: r.start,
+                end: r.end,
+                bytes: r.bytes.as_ref().map(|r| (r.start, r.end)),
+            };
+            add(fn_site(family[a]), fn_site(family[b]), "body", 0.0);
+        }
     }
-    for p in blocks::pairs(&ex.blocks, 20, include_tests, usize::MAX).1 {
-        add(
-            site(&p.a.file, p.a.start, p.a.end),
-            site(&p.b.file, p.b.start, p.b.end),
-            "block",
-            0.0,
-        );
+    for family in blocks::families(&ex.blocks, 20, include_tests) {
+        for (a, b) in links(&family, |a, b| blocks::overlaps(a, b)) {
+            let block_site = |b: &blocks::Block| Site {
+                file: b.file.clone(),
+                start: b.start,
+                end: b.end,
+                bytes: Some((b.bytes.start, b.bytes.end)),
+            };
+            add(block_site(family[a]), block_site(family[b]), "block", 0.0);
+        }
     }
     let token_clones = clones::run_jscpd(root)?;
     let clone_status = if token_clones.is_some() {
@@ -95,7 +105,11 @@ pub fn run(
         "unavailable"
     };
     for p in token_clones.into_iter().flatten() {
-        if allowed(&p.file_a) && allowed(&p.file_b) {
+        if allowed(&p.file_a)
+            && allowed(&p.file_b)
+            && (include_tests
+                || (!test_region(&p.file_a, p.a, &ex) && !test_region(&p.file_b, p.b, &ex)))
+        {
             add(
                 site(&p.file_a, p.a.0, p.a.1),
                 site(&p.file_b, p.b.0, p.b.1),
@@ -149,17 +163,69 @@ pub fn run(
     Ok(())
 }
 
-fn enclosing(site: Site, ex: &extract::Extraction) -> Site {
-    ex.fns
+fn test_region(file: &str, range: (u32, u32), ex: &extract::Extraction) -> bool {
+    let overlapping: Vec<_> = ex
+        .fns
         .iter()
-        .filter(|r| r.file == site.file && r.start <= site.start && r.end >= site.end)
-        .min_by_key(|r| r.end - r.start)
-        .map(|r| Site {
-            file: r.file.clone(),
-            start: r.start,
-            end: r.end,
+        .filter(|r| r.file == file && r.start <= range.1 && r.end >= range.0)
+        .collect();
+    !overlapping.is_empty() && overlapping.iter().all(|r| r.is_testish())
+}
+
+fn enclosing(site: Site, ex: &extract::Extraction) -> Site {
+    let containing = ex
+        .fns
+        .iter()
+        .filter(|r| {
+            r.file == site.file
+                && match (site.bytes, &r.bytes) {
+                    (Some((start, end)), Some(bytes)) => bytes.start <= start && bytes.end >= end,
+                    _ => r.start <= site.start && r.end >= site.end,
+                }
         })
-        .unwrap_or(site)
+        .min_by_key(|r| {
+            r.bytes
+                .as_ref()
+                .map(|b| b.end - b.start)
+                .unwrap_or((r.end - r.start) as usize)
+        });
+    let Some(r) = containing else {
+        return site;
+    };
+    Site {
+        file: r.file.clone(),
+        start: r.start,
+        end: r.end,
+        bytes: r.bytes.as_ref().map(|b| (b.start, b.end)),
+    }
+}
+
+// Keep enough non-overlapping links to connect each family, without its quadratic edge list.
+fn links<T>(records: &[T], overlaps: impl Fn(&T, &T) -> bool) -> Vec<(usize, usize)> {
+    let mut parents: Vec<_> = (0..records.len()).collect();
+    let mut links = Vec::new();
+    for (i, a) in records.iter().enumerate() {
+        for (j, b) in records.iter().enumerate().skip(i + 1) {
+            let left = root(&mut parents, i);
+            let right = root(&mut parents, j);
+            if left != right && !overlaps(a, b) {
+                parents[right] = left;
+                links.push((i, j));
+                if links.len() + 1 == records.len() {
+                    return links;
+                }
+            }
+        }
+    }
+    links
+}
+
+fn root(parents: &mut [usize], mut i: usize) -> usize {
+    while parents[i] != i {
+        parents[i] = parents[parents[i]];
+        i = parents[i];
+    }
+    i
 }
 
 fn group(pairs: &[Pair]) -> Vec<Vec<usize>> {
@@ -207,7 +273,7 @@ fn group(pairs: &[Pair]) -> Vec<Vec<usize>> {
         let lines = indices.iter().map(|&i| pairs[i].lines).max().unwrap_or(0);
         let score = indices
             .iter()
-            .map(|&i| (pairs[i].name_score * 1000.0) as u32)
+            .map(|&i| pairs[i].name_score.to_bits())
             .max()
             .unwrap_or(0);
         (structural.len(), lines, score)
@@ -217,7 +283,12 @@ fn group(pairs: &[Pair]) -> Vec<Vec<usize>> {
 }
 
 fn location(site: &Site) -> serde_json::Value {
-    serde_json::json!({"file": site.file, "start": site.start, "end": site.end})
+    let mut value = serde_json::json!({"file": site.file, "start": site.start, "end": site.end});
+    if let Some((start, end)) = site.bytes {
+        value["start_byte"] = start.into();
+        value["end_byte"] = end.into();
+    }
+    value
 }
 
 fn pair_json(pair: &Pair) -> serde_json::Value {
@@ -234,17 +305,47 @@ mod tests {
                 file: a.into(),
                 start: 1,
                 end: 10,
+                bytes: None,
             },
             b: Site {
                 file: b.into(),
                 start: 1,
                 end: 10,
+                bytes: None,
             },
             evidence: [evidence].into_iter().collect(),
             lines: 10,
             name_score: 0.5,
             fragments: vec![],
         }
+    }
+
+    #[test]
+    fn compact_links_preserve_connectivity_through_overlapping_windows() {
+        let records = [(0, 10), (1, 2), (3, 11), (12, 13)];
+        let found = links(&records, |a, b| a.0 < b.1 && b.0 < a.1);
+        assert_eq!(found.len(), 3);
+        assert_eq!(links(&vec![0; 1000], |_, _| false).len(), 999);
+    }
+
+    #[test]
+    fn byte_locations_remain_distinct_when_no_function_can_be_identified() {
+        let a = Site {
+            file: "one.ts".into(),
+            start: 1,
+            end: 1,
+            bytes: Some((10, 30)),
+        };
+        let b = Site {
+            bytes: Some((50, 70)),
+            ..a.clone()
+        };
+        let ex = extract::Extraction {
+            fns: vec![],
+            types: vec![],
+            blocks: vec![],
+        };
+        assert_ne!(location(&enclosing(a, &ex)), location(&enclosing(b, &ex)));
     }
 
     #[test]

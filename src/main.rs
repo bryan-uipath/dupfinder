@@ -70,7 +70,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Group and rank name, body, block, and token-clone evidence
+    /// Group evidence: names >= 0.5, bodies >= 30 tokens, blocks >= 20, and configured clones
     Audit {
         #[arg(default_value = ".")]
         path: PathBuf,

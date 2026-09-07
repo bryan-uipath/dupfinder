@@ -44,18 +44,11 @@ pub fn function(callable: Node, src: &str) -> Option<Shape> {
         leaves: 0,
     };
     let mut cursor = callable.walk();
-    if callable.children(&mut cursor).any(|n| n.kind() == "async") {
-        shape.tokens.push("async".into());
-    }
-    for part in [
-        params,
-        callable.child_by_field_name("return_type"),
-        Some(body),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        emit(part, src, &bindings, &mut shape);
+    let name = callable.child_by_field_name("name");
+    for part in callable.children(&mut cursor) {
+        if Some(part) != name {
+            emit(part, src, &bindings, &mut shape);
+        }
     }
     Some(shape)
 }
@@ -93,13 +86,14 @@ fn declarations<'a>(node: Node, src: &'a str, bindings: &mut Vec<Binding<'a>>) -
         | "class"
         | "class_declaration"
         | "method_definition"
-        | "variable_declaration" | "with_statement" => return None,
+        | "variable_declaration"
+        | "with_statement" => return None,
         "variable_declarator" => {
             let name = node.child_by_field_name("name")?;
             let mut scope = node.parent()?;
             while !matches!(
                 scope.kind(),
-                "statement_block" | "for_statement" | "for_in_statement"
+                "statement_block" | "switch_body" | "for_statement" | "for_in_statement"
             ) {
                 scope = scope.parent()?;
             }
@@ -127,7 +121,7 @@ fn declarations<'a>(node: Node, src: &'a str, bindings: &mut Vec<Binding<'a>>) -
         "call_expression"
             if node
                 .child_by_field_name("function")
-                .is_some_and(|f| &src[f.byte_range()] == "eval") =>
+                .is_some_and(|f| direct_eval(f, src)) =>
         {
             return None
         }
@@ -138,6 +132,20 @@ fn declarations<'a>(node: Node, src: &'a str, bindings: &mut Vec<Binding<'a>>) -
         declarations(child, src, bindings)?;
     }
     Some(())
+}
+
+fn direct_eval(mut node: Node, src: &str) -> bool {
+    while node.kind() == "parenthesized_expression" {
+        let mut cursor = node.walk();
+        let Some(inner) = node
+            .named_children(&mut cursor)
+            .find(|n| n.kind() != "comment")
+        else {
+            return false;
+        };
+        node = inner;
+    }
+    node.kind() == "identifier" && &src[node.byte_range()] == "eval"
 }
 
 fn emit(node: Node, src: &str, bindings: &[Binding], shape: &mut Shape) {
@@ -151,6 +159,17 @@ fn emit(node: Node, src: &str, bindings: &[Binding], shape: &mut Shape) {
             .iter()
             .position(|binding| binding.name == text && binding.scope.contains(&node.start_byte()));
         match (node.kind(), binding) {
+            ("identifier", _)
+                if node.parent().is_some_and(|parent| {
+                    matches!(
+                        parent.kind(),
+                        "jsx_opening_element" | "jsx_closing_element" | "jsx_self_closing_element"
+                    ) && parent.child_by_field_name("name") == Some(node)
+                        && text.starts_with(|c: char| c.is_ascii_lowercase())
+                }) =>
+            {
+                shape.tokens.push(text.to_string())
+            }
             ("identifier", Some(index)) => shape.tokens.push(format!("binding:{index}")),
             ("shorthand_property_identifier", Some(index)) => {
                 shape
@@ -210,6 +229,53 @@ mod tests {
     }
 
     #[test]
+    fn preserves_headers_and_switch_scope() {
+        assert_ne!(
+            shape("function a<T extends Foo>(x) { return x; }")
+                .unwrap()
+                .tokens,
+            shape("function b<T extends Bar>(x) { return x; }")
+                .unwrap()
+                .tokens
+        );
+        assert_ne!(shape("function a(flag) { switch(flag) { case 0: const inside = 0; break; } return inside; }").unwrap().tokens,
+                   shape("function b(flag) { switch(flag) { case 0: const other = 0; break; } return other; }").unwrap().tokens);
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TSX.into())
+            .unwrap();
+        let jsx = |src: &str, parser: &mut Parser| {
+            let tree = parser.parse(src, None).unwrap();
+            function(tree.root_node().named_child(0).unwrap(), src)
+                .unwrap()
+                .tokens
+        };
+        assert_ne!(
+            jsx("function a(div) { return <div/>; }", &mut parser),
+            jsx("function b(span) { return <span/>; }", &mut parser)
+        );
+        let method = |src: &str, parser: &mut Parser| {
+            let tree = parser.parse(src, None).unwrap();
+            let node = tree
+                .root_node()
+                .named_child(0)
+                .unwrap()
+                .child_by_field_name("body")
+                .unwrap()
+                .named_child(0)
+                .unwrap();
+            function(node, src).unwrap().tokens
+        };
+        assert_ne!(
+            method(
+                "class A { get value() { return this.current; } }",
+                &mut parser
+            ),
+            method("class B { value() { return this.current; } }", &mut parser)
+        );
+    }
+
+    #[test]
     fn does_not_leak_block_bindings_or_guess_unsupported_scopes() {
         assert_ne!(
             shape("function a() { { const x = 1; } return x; }")
@@ -225,6 +291,7 @@ mod tests {
             "function f(x) { return () => x; }",
             "function f(x) { var y = x; return y; }",
             "function f(x) { return eval('x'); }",
+            "function f(x) { return (eval)('x'); }",
         ] {
             assert!(shape(src).is_none(), "{src}");
         }

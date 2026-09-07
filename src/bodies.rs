@@ -1,6 +1,7 @@
 //! Group equal normalized bodies; scores remain evidence, never equivalence claims.
 use crate::extract::{Extraction, FnRecord};
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, HashMap};
 
 pub struct BodyPair<'a> {
     pub a: &'a FnRecord,
@@ -8,7 +9,12 @@ pub struct BodyPair<'a> {
     pub tokens: usize,
 }
 
-pub fn pairs(ex: &Extraction, min_tokens: usize, include_tests: bool) -> Vec<BodyPair<'_>> {
+pub fn pairs(
+    ex: &Extraction,
+    min_tokens: usize,
+    include_tests: bool,
+    limit: usize,
+) -> (usize, Vec<BodyPair<'_>>) {
     let mut groups: HashMap<&[String], Vec<&FnRecord>> = HashMap::new();
     for record in &ex.fns {
         if !include_tests && record.is_testish() {
@@ -20,7 +26,8 @@ pub fn pairs(ex: &Extraction, min_tokens: usize, include_tests: bool) -> Vec<Bod
             }
         }
     }
-    let mut pairs = Vec::new();
+    let mut pairs = BTreeMap::new();
+    let mut total = 0;
     for records in groups.values() {
         for (i, &a) in records.iter().enumerate() {
             for &b in &records[i + 1..] {
@@ -28,22 +35,35 @@ pub fn pairs(ex: &Extraction, min_tokens: usize, include_tests: bool) -> Vec<Bod
                     continue;
                 }
                 if let Some(shape) = &a.shape {
-                    pairs.push(BodyPair {
-                        a,
-                        b,
-                        tokens: shape.leaves,
-                    });
+                    total += 1;
+                    let key = (
+                        Reverse(shape.leaves),
+                        a.file.as_str(),
+                        a.start,
+                        b.file.as_str(),
+                        b.start,
+                    );
+                    if limit > 0
+                        && (pairs.len() < limit
+                            || pairs.last_key_value().is_some_and(|(last, _)| &key < last))
+                    {
+                        pairs.insert(
+                            key,
+                            BodyPair {
+                                a,
+                                b,
+                                tokens: shape.leaves,
+                            },
+                        );
+                        if pairs.len() > limit {
+                            pairs.pop_last();
+                        }
+                    }
                 }
             }
         }
     }
-    pairs.sort_by(|a, b| {
-        b.tokens.cmp(&a.tokens).then_with(|| {
-            (&a.a.file, a.a.start, &a.b.file, a.b.start)
-                .cmp(&(&b.a.file, b.a.start, &b.b.file, b.b.start))
-        })
-    });
-    pairs
+    (total, pairs.into_values().collect())
 }
 
 pub fn location(record: &FnRecord) -> serde_json::Value {

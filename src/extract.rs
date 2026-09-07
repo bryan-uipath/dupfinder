@@ -14,6 +14,8 @@ pub struct FnRecord {
     pub sig: String,
     pub doc: String,
     pub body: String,
+    pub shape: Option<crate::normalized::Shape>,
+    pub bytes: Option<std::ops::Range<usize>>,
     /// Root-relative path, '/'-separated.
     pub file: String,
     /// 1-based lines.
@@ -69,6 +71,14 @@ fn clip_doc(s: String) -> String {
 const SKIP_DIRS: &[&str] = &["node_modules", "target", "dist", "build", ".git", "vendor"];
 
 pub fn extract_dir(root: &Path) -> Result<Extraction> {
+    extract_with_shapes(root, false)
+}
+
+pub fn extract_structural(root: &Path) -> Result<Extraction> {
+    extract_with_shapes(root, true)
+}
+
+fn extract_with_shapes(root: &Path, structural: bool) -> Result<Extraction> {
     let mut files: Vec<std::path::PathBuf> = ignore::WalkBuilder::new(root)
         .hidden(true)
         .build()
@@ -134,7 +144,7 @@ pub fn extract_dir(root: &Path) -> Result<Extraction> {
                 if lang == "rust" {
                     walk_rust(tree.root_node(), &src, &rel, &mut ex);
                 } else {
-                    walk_ts(tree.root_node(), &src, &rel, &mut ex);
+                    walk_ts(tree.root_node(), &src, &rel, &mut ex, structural);
                 }
             }
             None => extract_functor(&src, &rel, &mut ex),
@@ -230,6 +240,8 @@ fn walk_rust(node: Node, src: &str, file: &str, ex: &mut Extraction) {
                         public: sig.starts_with("pub"),
                         sig,
                         body: body.to_string(),
+                        shape: None,
+                        bytes: None,
                         file: file.to_string(),
                         start,
                         end,
@@ -353,7 +365,7 @@ fn ts_doc_anchor(node: Node) -> Node {
     anchor
 }
 
-fn push_ts_fn(ex: &mut Extraction, node: Node, name_node: Node, body_node: Option<Node>, sig_from: Node, src: &str, file: &str, public: bool) {
+fn push_ts_fn(ex: &mut Extraction, node: Node, name_node: Node, body_node: Option<Node>, sig_from: Node, src: &str, file: &str, public: bool, structural: bool) {
     let full = text(sig_from, src);
     let sig_end = body_node
         .map(|b| b.start_byte().saturating_sub(sig_from.start_byte()))
@@ -369,6 +381,8 @@ fn push_ts_fn(ex: &mut Extraction, node: Node, name_node: Node, body_node: Optio
         sig: collapse_ws(&full[..sig_end]),
         doc: ts_doc_before(ts_doc_anchor(node), src),
         body: full.to_string(),
+        bytes: Some(node.byte_range()),
+        shape: body_node.filter(|_| structural).and_then(|body| body.parent()).and_then(|callable| crate::normalized::function(callable, src)),
         file: file.to_string(),
         start,
         end,
@@ -377,21 +391,21 @@ fn push_ts_fn(ex: &mut Extraction, node: Node, name_node: Node, body_node: Optio
     });
 }
 
-fn walk_ts(node: Node, src: &str, file: &str, ex: &mut Extraction) {
+fn walk_ts(node: Node, src: &str, file: &str, ex: &mut Extraction, structural: bool) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
             "function_declaration" | "generator_function_declaration" => {
                 if let Some(name) = child.child_by_field_name("name") {
                     let body = child.child_by_field_name("body");
-                    push_ts_fn(ex, child, name, body, child, src, file, ts_is_exported(child, src));
+                    push_ts_fn(ex, child, name, body, child, src, file, ts_is_exported(child, src), structural);
                 }
             }
             "method_definition" => {
                 if let Some(name) = child.child_by_field_name("name") {
                     let body = child.child_by_field_name("body");
                     let private = ts_is_private(child, src);
-                    push_ts_fn(ex, child, name, body, child, src, file, !private);
+                    push_ts_fn(ex, child, name, body, child, src, file, !private, structural);
                 }
             }
             "variable_declarator" | "pair" | "public_field_definition" => {
@@ -403,7 +417,7 @@ fn walk_ts(node: Node, src: &str, file: &str, ex: &mut Extraction) {
                         if let Some(callable) = ts_callable(value, src) {
                             let body = callable.child_by_field_name("body");
                             let private = child.kind() == "public_field_definition" && ts_is_private(child, src);
-                            push_ts_fn(ex, child, name, body, child, src, file, !private && ts_is_exported(child, src));
+                            push_ts_fn(ex, child, name, body, child, src, file, !private && ts_is_exported(child, src), structural);
                         }
                     }
                 }
@@ -425,7 +439,7 @@ fn walk_ts(node: Node, src: &str, file: &str, ex: &mut Extraction) {
             }
             _ => {}
         }
-        walk_ts(child, src, file, ex);
+        walk_ts(child, src, file, ex, structural);
     }
 }
 
@@ -566,6 +580,8 @@ fn extract_functor(src: &str, file: &str, ex: &mut Extraction) {
             sig: lines[*i].trim().to_string(),
             doc: doc_parts.join(" "),
             body,
+            shape: None,
+                        bytes: None,
             file: file.to_string(),
             start: *i as u32 + 1,
             end: end as u32,
@@ -600,7 +616,7 @@ mod tests {
         let tree = parser.parse(src, None).unwrap();
         assert!(!tree.root_node().has_error());
         let mut ex = Extraction { fns: vec![], types: vec![] };
-        walk_ts(tree.root_node(), src, "src/example.tsx", &mut ex);
+        walk_ts(tree.root_node(), src, "src/example.tsx", &mut ex, true);
         assert_eq!(ex.fns.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
                    vec!["save", "clean", "encode", "hide", "#secret", "View"]);
         assert_eq!((ex.fns[0].start, ex.fns[0].end), (1, 3));
@@ -616,7 +632,7 @@ mod tests {
         parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
         let tree = parser.parse(src, None).unwrap();
         let mut ex = Extraction { fns: vec![], types: vec![] };
-        walk_ts(tree.root_node(), src, "src/example.ts", &mut ex);
+        walk_ts(tree.root_node(), src, "src/example.ts", &mut ex, true);
         assert!(ex.fns.is_empty());
     }
 }
@@ -632,7 +648,7 @@ mod visibility_tests {
         parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
         let tree = parser.parse(src, None).unwrap();
         let mut ex = Extraction { fns: vec![], types: vec![] };
-        walk_ts(tree.root_node(), src, "a.ts", &mut ex);
+        walk_ts(tree.root_node(), src, "a.ts", &mut ex, true);
         let public: Vec<_> = ex.fns.iter().filter(|f| f.public).map(|f| f.name.as_str()).collect();
         assert_eq!(public, vec!["outer", "privateCallback", "privateValue", "quoted", "privateThing"]);
         assert!(ex.fns.iter().any(|f| f.name == "cb" && !f.public));
@@ -645,7 +661,7 @@ mod visibility_tests {
         parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
         let tree = parser.parse(src, None).unwrap();
         let mut ex = Extraction { fns: vec![], types: vec![] };
-        walk_ts(tree.root_node(), src, "a.ts", &mut ex);
+        walk_ts(tree.root_node(), src, "a.ts", &mut ex, true);
         assert_eq!(ex.fns.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["fn"]);
     }
 }

@@ -38,6 +38,9 @@ pub fn function(callable: Node, src: &str) -> Option<Shape> {
             }
         }
     }
+    if let Some(params) = params {
+        declarations(params, src, &mut bindings)?;
+    }
     declarations(body, src, &mut bindings)?;
     let mut shape = Shape {
         tokens: vec![callable.kind().to_string()],
@@ -47,7 +50,16 @@ pub fn function(callable: Node, src: &str) -> Option<Shape> {
     let name = callable.child_by_field_name("name");
     for part in callable.children(&mut cursor) {
         if Some(part) != name {
-            emit(part, src, &bindings, &mut shape);
+            emit(
+                part,
+                src,
+                if Some(part) == params || part == body {
+                    &bindings
+                } else {
+                    &[]
+                },
+                &mut shape,
+            );
         }
     }
     Some(shape)
@@ -69,7 +81,9 @@ fn bind<'a>(
         return None;
     }
     let name = &src[node.byte_range()];
-    if bindings.iter().any(|binding| binding.name == name) {
+    if bindings.iter().any(|binding| {
+        binding.name == name && binding.scope.start < scope.end && scope.start < binding.scope.end
+    }) {
         return None;
     }
     bindings.push(Binding { name, scope });
@@ -85,6 +99,7 @@ fn declarations<'a>(node: Node, src: &'a str, bindings: &mut Vec<Binding<'a>>) -
         | "generator_function_declaration"
         | "class"
         | "class_declaration"
+        | "abstract_class_declaration"
         | "method_definition"
         | "variable_declaration"
         | "with_statement" => return None,
@@ -292,6 +307,9 @@ mod tests {
             "function f(x) { var y = x; return y; }",
             "function f(x) { return eval('x'); }",
             "function f(x) { return (eval)('x'); }",
+            "function f(x, y = eval('x')) { return y; }",
+            "function f(x = () => 1) { return x; }",
+            "function f(x) { abstract class A {} return x; }",
         ] {
             assert!(shape(src).is_none(), "{src}");
         }

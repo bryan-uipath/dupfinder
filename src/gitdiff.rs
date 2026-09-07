@@ -44,7 +44,7 @@ pub fn changed_ranges(root: &Path, base: &str) -> Result<ChangedRanges> {
     // line numbers match the files extract_dir reads. (The tempting
     // `git diff base...` form stops at HEAD — uncommitted edits vanish and
     // ranges go stale against the worktree.)
-    let diff = git(root, &["diff", "-U0", "--no-color", "--merge-base", base])?;
+    let diff = git(root, &["diff", "--relative", "-U0", "--no-color", "--merge-base", base])?;
     let mut ranges: ChangedRanges = BTreeMap::new();
     let mut current: Option<String> = None;
     for line in diff.lines() {
@@ -76,4 +76,28 @@ pub fn changed_ranges(root: &Path, base: &str) -> Result<ChangedRanges> {
 
 pub fn overlaps(ranges: &[(u32, u32)], start: u32, end: u32) -> bool {
     ranges.iter().any(|&(a, b)| !(b < start || a > end))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subdirectory_ranges_match_scan_relative_paths() {
+        let root = std::env::temp_dir().join(format!("dupfinder-diff-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("app/src")).unwrap();
+        git(&root, &["init", "-b", "main"]).unwrap();
+        std::fs::write(root.join("app/src/a.ts"), "const value = 1;\n").unwrap();
+        std::fs::write(root.join("outside.ts"), "const value = 1;\n").unwrap();
+        git(&root, &["add", "."]).unwrap();
+        git(&root, &["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture"]).unwrap();
+        std::fs::write(root.join("app/src/a.ts"), "const value = 2;\n").unwrap();
+        std::fs::write(root.join("outside.ts"), "const value = 2;\n").unwrap();
+        std::fs::write(root.join("app/new.ts"), "const value = 3;\n").unwrap();
+        let ranges = changed_ranges(&root.join("app"), "main").unwrap();
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges["src/a.ts"], vec![(1, 1)]);
+        assert_eq!(ranges["new.ts"], vec![(1, u32::MAX)]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -1,6 +1,4 @@
-//! Token-level copy-paste clones via jscpd (shelled out through npx).
-//! jscpd is optional: if npx is unavailable the caller gets Ok(None) and the
-//! review proceeds on embeddings alone.
+//! Token-level copy-paste clones via jscpd, with an npx fallback.
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -15,27 +13,40 @@ pub struct TokenClone {
 }
 
 impl TokenClone {
-    /// jscpd reports paths relative to each scanned root, so match on a
-    /// path-component-anchored suffix ("store.rs" must not match "restore.rs").
-    pub fn touches(&self, repo_rel_file: &str) -> bool {
-        fn suffix_match(a: &str, b: &str) -> bool {
-            a == b || a.ends_with(&format!("/{b}")) || b.ends_with(&format!("/{a}"))
-        }
-        suffix_match(repo_rel_file, &self.file_a) || suffix_match(repo_rel_file, &self.file_b)
+    pub fn touches_change(&self, changed: &crate::gitdiff::ChangedRanges) -> bool {
+        [(&self.file_a, self.a), (&self.file_b, self.b)]
+            .iter()
+            .any(|(file, (start, end))| {
+                changed
+                    .get(file.as_str())
+                    .is_some_and(|ranges| crate::gitdiff::overlaps(ranges, *start, *end))
+            })
     }
 }
 
 pub fn run_jscpd(root: &Path) -> Result<Option<Vec<TokenClone>>> {
-    if Command::new("npx").arg("--version").output().is_err() {
-        eprintln!("[dupfinder] npx not found — skipping token-clone (jscpd) pass");
+    let root = root.canonicalize().context("resolve scan root")?;
+    let mut cmd = if Command::new("jscpd")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+    {
+        Command::new("jscpd")
+    } else if Command::new("npx")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+    {
+        let mut cmd = Command::new("npx");
+        cmd.args(["--yes", "jscpd"]);
+        cmd
+    } else {
+        eprintln!("[dupfinder] jscpd and npx unavailable — skipping token-clone pass");
         return Ok(None);
-    }
+    };
     let out_dir = std::env::temp_dir().join(format!("dupfinder-jscpd-{}", std::process::id()));
-    let mut cmd = Command::new("npx");
-    cmd.current_dir(root)
-        .arg("--yes")
-        .arg("jscpd")
-        .args(["--reporters", "json", "--silent", "--output"])
+    cmd.current_dir(&root)
+        .args(["--absolute", "--reporters", "json", "--silent", "--output"])
         .arg(&out_dir);
     // Honor the repo's own jscpd config when present; otherwise sane defaults.
     if !root.join(".jscpd.json").exists() {
@@ -46,7 +57,7 @@ pub fn run_jscpd(root: &Path) -> Result<Option<Vec<TokenClone>>> {
         );
         cmd.arg(".");
     }
-    let output = cmd.output().context("run npx jscpd")?;
+    let output = cmd.output().context("run jscpd")?;
     let report_path = out_dir.join("jscpd-report.json");
     if !report_path.exists() {
         eprintln!(
@@ -63,8 +74,11 @@ pub fn run_jscpd(root: &Path) -> Result<Option<Vec<TokenClone>>> {
     for d in report["duplicates"].as_array().into_iter().flatten() {
         let side = |k: &str| -> Option<(String, (u32, u32))> {
             let f = &d[k];
+            let path = Path::new(f["name"].as_str()?);
+            let path = path.strip_prefix(&root).unwrap_or(path);
+            let path = path.strip_prefix(".").unwrap_or(path);
             Some((
-                f["name"].as_str()?.replace('\\', "/"),
+                path.to_string_lossy().replace('\\', "/"),
                 (f["start"].as_u64()? as u32, f["end"].as_u64()? as u32),
             ))
         };
@@ -79,4 +93,29 @@ pub fn run_jscpd(root: &Path) -> Result<Option<Vec<TokenClone>>> {
         }
     }
     Ok(Some(clones))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clones_must_overlap_changed_lines_in_the_same_file() {
+        let clone = TokenClone {
+            file_a: "src/a.ts".into(),
+            a: (10, 20),
+            file_b: "src/b.ts".into(),
+            b: (30, 40),
+            lines: 10,
+        };
+        for (file, range, expected) in [
+            ("src/a.ts", (1, 9), false),
+            ("src/a.ts", (20, 20), true),
+            ("src/b.ts", (35, 36), true),
+            ("other/src/a.ts", (10, 20), false),
+        ] {
+            let changed = [(file.to_string(), vec![range])].into_iter().collect();
+            assert_eq!(clone.touches_change(&changed), expected);
+        }
+    }
 }

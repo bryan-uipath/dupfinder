@@ -3,12 +3,10 @@
 //! bindings only, which is Functor's whole reuse surface: file = module).
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::path::Path;
 use tree_sitter::{Node, Parser};
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct FnRecord {
     pub name: String,
     /// Enclosing impl/trait/mod/class chain, outermost first.
@@ -21,50 +19,40 @@ pub struct FnRecord {
     /// 1-based lines.
     pub start: u32,
     pub end: u32,
-    pub lines: u32,
-    pub lang: String,
     pub public: bool,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct TypeRecord {
     pub name: String,
     pub kind: String,
     pub doc: String,
     pub file: String,
     pub start: u32,
-    pub lang: String,
+    pub end: u32,
     pub public: bool,
 }
 
 pub struct Extraction {
     pub fns: Vec<FnRecord>,
     pub types: Vec<TypeRecord>,
-    /// fnv1a content hash per extracted file (for incremental re-embedding).
-    pub file_hashes: BTreeMap<String, String>,
 }
 
 impl FnRecord {
     pub fn is_testish(&self) -> bool {
-        self.context.contains("mod tests")
-            || self.file.contains("/tests/")
-            || self.file.contains("/test/")
-            || self.file.contains("/__tests__/")
-            || self.file.ends_with(".test.ts")
-            || self.file.ends_with(".spec.ts")
-            || self.file.ends_with(".test.js")
-            || self.file.ends_with(".spec.js")
+        self.context.contains("mod tests") || is_test_file(&self.file)
     }
+}
 
-    /// The text that gets embedded: context + signature + doc + truncated body.
-    pub fn embed_text(&self) -> String {
-        let body = truncate_chars(&self.body, 2000);
-        format!("{} {}\n{}\n{}", self.context, self.sig, self.doc, body)
-    }
-
-    pub fn location(&self) -> String {
-        format!("{}:{}", self.file, self.start)
-    }
+/// Shared by function and type candidates so test declarations stay out of audits.
+pub fn is_test_file(file: &str) -> bool {
+    file.split('/')
+        .any(|part| matches!(part, "tests" | "test" | "__tests__" | "__mocks__"))
+        || ["ts", "tsx", "js", "jsx", "mts", "cts", "mjs", "cjs"]
+            .iter()
+            .any(|ext| {
+                file.ends_with(&format!(".test.{ext}")) || file.ends_with(&format!(".spec.{ext}"))
+            })
 }
 
 fn truncate_chars(s: &str, max: usize) -> &str {
@@ -76,15 +64,6 @@ fn truncate_chars(s: &str, max: usize) -> &str {
 
 fn clip_doc(s: String) -> String {
     truncate_chars(&s, 300).to_string()
-}
-
-pub fn fnv1a(bytes: &[u8]) -> String {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for &b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    format!("{h:016x}")
 }
 
 const SKIP_DIRS: &[&str] = &["node_modules", "target", "dist", "build", ".git", "vendor"];
@@ -109,7 +88,6 @@ pub fn extract_dir(root: &Path) -> Result<Extraction> {
     let mut ex = Extraction {
         fns: Vec::new(),
         types: Vec::new(),
-        file_hashes: BTreeMap::new(),
     };
 
     let mut rust_parser = Parser::new();
@@ -146,7 +124,6 @@ pub fn extract_dir(root: &Path) -> Result<Extraction> {
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
-        ex.file_hashes.insert(rel.clone(), fnv1a(src.as_bytes()));
 
         match parser {
             Some(p) => {
@@ -256,8 +233,6 @@ fn walk_rust(node: Node, src: &str, file: &str, ex: &mut Extraction) {
                         file: file.to_string(),
                         start,
                         end,
-                        lines: end - start + 1,
-                        lang: "rust".into(),
                     });
                 }
             }
@@ -270,7 +245,8 @@ fn walk_rust(node: Node, src: &str, file: &str, ex: &mut Extraction) {
                         doc: rust_doc_before(child, src),
                         file: file.to_string(),
                         start: child.start_position().row as u32 + 1,
-                        lang: "rust".into(),
+                        end: child.end_position().row as u32 + 1,
+
                         public: head.starts_with("pub"),
                     });
                 }
@@ -383,8 +359,7 @@ fn push_ts_fn(ex: &mut Extraction, node: Node, name_node: Node, body_node: Optio
         file: file.to_string(),
         start,
         end,
-        lines: end - start + 1,
-        lang: "typescript".into(),
+
         public,
     });
 }
@@ -428,7 +403,8 @@ fn walk_ts(node: Node, src: &str, file: &str, ex: &mut Extraction) {
                         doc: ts_doc_before(ts_doc_anchor(child), src),
                         file: file.to_string(),
                         start: child.start_position().row as u32 + 1,
-                        lang: "typescript".into(),
+                        end: child.end_position().row as u32 + 1,
+
                         public: ts_is_exported(child),
                     });
                 }
@@ -492,7 +468,8 @@ fn extract_functor(src: &str, file: &str, ex: &mut Extraction) {
                 doc: doc_parts.join(" "),
                 file: file.to_string(),
                 start: *i as u32 + 1,
-                lang: "functor".into(),
+                end: end as u32,
+
                 public: true,
             });
             continue;
@@ -508,8 +485,7 @@ fn extract_functor(src: &str, file: &str, ex: &mut Extraction) {
             file: file.to_string(),
             start: *i as u32 + 1,
             end: end as u32,
-            lines: (end - i) as u32,
-            lang: "functor".into(),
+
             public: true,
         });
     }

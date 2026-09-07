@@ -1,7 +1,4 @@
-//! dupfinder — duplication detection + reuse discovery for Rust, TypeScript,
-//! and Functor Lang. Four engines: an API index (prevention), identifier-token
-//! Jaccard (lexical prior art), local code embeddings (semantic similarity),
-//! and jscpd (token clones).
+//! Duplication detection and reuse discovery through API indexing, names, and token clones.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -9,12 +6,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 mod clones;
-mod embedder;
 mod extract;
 mod gitdiff;
 mod names;
 mod skill;
-mod store;
 
 #[derive(Parser)]
 #[command(name = "dupfinder", version, about)]
@@ -36,32 +31,13 @@ enum Cmd {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Build or incrementally update the embedding index (.dupfinder/)
-    Embed {
-        #[arg(default_value = ".")]
-        path: PathBuf,
-    },
-    /// Most similar function pairs across the whole index
-    Similar {
-        #[arg(default_value = ".")]
-        path: PathBuf,
-        #[arg(long, default_value_t = 0.9)]
-        threshold: f32,
-        #[arg(long, default_value_t = 40)]
-        top: usize,
-        #[arg(long, default_value_t = 6)]
-        min_lines: u32,
-        /// Include test functions
-        #[arg(long)]
-        include_tests: bool,
-    },
-    /// Token-level copy-paste clones via jscpd (needs npx)
+    /// Token-level copy-paste clones via jscpd (or npx fallback)
     Clones {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
     /// Lexical prior-art search: rank existing fns/types by identifier-token
-    /// (Jaccard) similarity to what a change adds. No embeddings — milliseconds.
+    /// (Jaccard) similarity to what a change adds. No model required.
     Names {
         #[arg(default_value = ".")]
         path: PathBuf,
@@ -92,17 +68,17 @@ enum Cmd {
         excludes: Vec<String>,
     },
     /// Duplication review of the current change vs a base ref:
-    /// token clones touching the diff + similar existing code per changed function
+    /// token clones touching changed lines + lexical prior art
     Review {
         #[arg(default_value = ".")]
         path: PathBuf,
         /// Base ref (default: origin/main, origin/master, main, or master)
         #[arg(long)]
         base: Option<String>,
-        /// Similar existing functions to list per changed function
+        /// Lexical candidates to list per changed item
         #[arg(long, default_value_t = 3)]
         top: usize,
-        /// Ignore changed functions smaller than this
+        /// Ignore changed items smaller than this
         #[arg(long, default_value_t = 5)]
         min_lines: u32,
     },
@@ -120,19 +96,33 @@ enum Cmd {
 fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Index { path, private, out } => cmd_index(&path, private, out),
-        Cmd::Embed { path } => {
-            store::build_or_update(&path)?;
-            eprintln!("[dupfinder] index up to date in {}/{}", path.display(), store::DIR);
-            Ok(())
-        }
-        Cmd::Similar { path, threshold, top, min_lines, include_tests } => {
-            cmd_similar(&path, threshold, top, min_lines, include_tests)
-        }
         Cmd::Clones { path } => cmd_clones(&path),
-        Cmd::Names { path, base, names, top, min_score, include_tests, all, excludes } => {
-            cmd_names(&path, base, &names, top, min_score, include_tests, all, &excludes)
-        }
-        Cmd::Review { path, base, top, min_lines } => cmd_review(&path, base, top, min_lines),
+        Cmd::Names {
+            path,
+            base,
+            names,
+            top,
+            min_score,
+            include_tests,
+            all,
+            excludes,
+        } => cmd_names(
+            &path,
+            base,
+            &names,
+            top,
+            min_score,
+            include_tests,
+            all,
+            &excludes,
+            1,
+        ),
+        Cmd::Review {
+            path,
+            base,
+            top,
+            min_lines,
+        } => cmd_review(&path, base, top, min_lines),
         Cmd::InstallSkill { project, dir } => skill::install(project, dir),
     }
 }
@@ -199,42 +189,6 @@ fn clip(s: &str, max: usize) -> String {
     }
 }
 
-// -------------------------------------------------------------- similar
-
-fn cmd_similar(root: &Path, threshold: f32, top: usize, min_lines: u32, include_tests: bool) -> Result<()> {
-    let st = store::build_or_update(root)?;
-    let keep: Vec<usize> = st
-        .records
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r.lines >= min_lines && (include_tests || !r.is_testish()))
-        .map(|(i, _)| i)
-        .collect();
-    let mut pairs: Vec<(f32, usize, usize)> = Vec::new();
-    for (a, &i) in keep.iter().enumerate() {
-        for &j in &keep[a + 1..] {
-            let (ri, rj) = (&st.records[i], &st.records[j]);
-            // Overlapping ranges in one file = nested/self extraction, not a pair.
-            if ri.file == rj.file && ri.start <= rj.end && rj.start <= ri.end {
-                continue;
-            }
-            let s = embedder::dot(&st.vectors[i], &st.vectors[j]);
-            if s >= threshold {
-                pairs.push((s, i, j));
-            }
-        }
-    }
-    pairs.sort_by(|x, y| y.0.total_cmp(&x.0));
-    println!("# similar pairs (threshold {threshold}, {} candidates)\n", pairs.len());
-    for (s, i, j) in pairs.into_iter().take(top) {
-        let (a, b) = (&st.records[i], &st.records[j]);
-        let tag = if a.name == b.name { "  [same-name]" } else { "" };
-        println!("{s:.3}  {}  {} ({}L){tag}", a.name, a.location(), a.lines);
-        println!("       {}  {} ({}L)\n", b.name, b.location(), b.lines);
-    }
-    Ok(())
-}
-
 // --------------------------------------------------------------- clones
 
 fn cmd_clones(root: &Path) -> Result<()> {
@@ -265,6 +219,7 @@ fn cmd_names(
     include_tests: bool,
     audit: bool,
     excludes: &[String],
+    min_lines: u32,
 ) -> Result<()> {
     let ex = extract::extract_dir(root)?;
     let mut all = names::candidates(&ex);
@@ -290,7 +245,10 @@ fn cmd_names(
                 // Test code is not prior art worth deduping against, and a test
                 // is not worth asking about either.
                 (include_tests || !c.testish)
-                    && changed.get(&c.file).is_some_and(|r| gitdiff::overlaps(r, c.start, c.end))
+                    && c.end - c.start + 1 >= min_lines
+                    && changed
+                        .get(&c.file)
+                        .is_some_and(|r| gitdiff::overlaps(r, c.start, c.end))
             })
             .cloned()
             .collect()
@@ -412,29 +370,12 @@ fn cmd_review(root: &Path, base: Option<String>, top: usize, min_lines: u32) -> 
         return Ok(());
     }
 
-    let st = store::build_or_update(root)?;
-    let changed_idx: Vec<usize> = st
-        .records
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| {
-            changed
-                .get(&r.file)
-                .is_some_and(|ranges| gitdiff::overlaps(ranges, r.start, r.end))
-        })
-        .map(|(i, _)| i)
-        .collect();
-    let changed_set: BTreeSet<usize> = changed_idx.iter().copied().collect();
-
-    // --- token clones touching changed files
+    // --- token clones overlapping changed lines
     println!("## Token clones touching this change (jscpd)\n");
     match clones::run_jscpd(root)? {
         None => println!("(jscpd unavailable — skipped)\n"),
         Some(list) => {
-            let hits: Vec<_> = list
-                .iter()
-                .filter(|c| changed.keys().any(|f| c.touches(f)))
-                .collect();
+            let hits: Vec<_> = list.iter().filter(|c| c.touches_change(&changed)).collect();
             if hits.is_empty() {
                 println!("None.\n");
             } else {
@@ -449,64 +390,18 @@ fn cmd_review(root: &Path, base: Option<String>, top: usize, min_lines: u32) -> 
         }
     }
 
-    // --- semantic neighbors per changed function
-    println!("## Similar existing code per changed function (embeddings)\n");
-    println!("Similarity is rank-meaningful, not absolute — the top neighbor of a genuine re-implementation often scores ~0.5-0.7. Judge by reading the neighbor, not by the number.\n");
-    let mut reported = 0usize;
-    for &i in &changed_idx {
-        let r = &st.records[i];
-        if r.lines < min_lines || r.is_testish() {
-            continue;
-        }
-        let mut sims: Vec<(f32, usize)> = st
-            .vectors
-            .iter()
-            .enumerate()
-            .filter(|(j, _)| {
-                let o = &st.records[*j];
-                // Skip self and anything overlapping it (nested extraction).
-                *j != i && !(o.file == r.file && o.start <= r.end && r.start <= o.end)
-            })
-            .map(|(j, v)| (embedder::dot(&st.vectors[i], v), j))
-            .collect();
-        sims.sort_by(|x, y| y.0.total_cmp(&x.0));
-        let neighbors: Vec<_> = sims
-            .into_iter()
-            .take(top)
-            .filter(|(s, _)| *s >= 0.45)
-            .collect();
-        if neighbors.is_empty() {
-            continue;
-        }
-        reported += 1;
-        println!("### `{}`  ({}, {}L, {})", r.name, r.location(), r.lines, r.lang);
-        for (s, j) in neighbors {
-            let o = &st.records[j];
-            let mut tags = Vec::new();
-            if changed_set.contains(&j) {
-                tags.push("also changed in this diff");
-            }
-            if o.is_testish() {
-                tags.push("test code");
-            }
-            let tag = if tags.is_empty() {
-                String::new()
-            } else {
-                format!("  [{}]", tags.join(", "))
-            };
-            let doc = if o.doc.is_empty() {
-                String::new()
-            } else {
-                format!(" — {}", first_sentence(&o.doc))
-            };
-            println!("- {s:.2}  `{}`  {}{}{}", o.name, o.location(), doc, tag);
-        }
-        println!();
-    }
-    if reported == 0 {
-        println!("No changed functions with notable neighbors.\n");
-    }
-    Ok(())
+    println!("## Lexical prior art for changed items\n");
+    cmd_names(
+        root,
+        Some(base),
+        &[],
+        top,
+        0.3,
+        false,
+        false,
+        &[],
+        min_lines,
+    )
 }
 
 #[cfg(test)]

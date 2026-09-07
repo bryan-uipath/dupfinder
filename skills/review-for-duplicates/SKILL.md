@@ -1,16 +1,6 @@
 ---
 name: review-for-duplicates
-description: >-
-  Duplication detection and reuse discovery via the dupfinder CLI, scoped to a
-  change and fast enough to run every time. Two moments: PREVENTION — before
-  writing a new function/helper, or when asked "does something already exist for
-  X?", `dupfinder names --name <ident>` ranks existing prior art (and
-  `dupfinder index` is the greppable full list). DETECTION — `dupfinder names
-  --base <ref>` plus `dupfinder clones` check a change for lexically similar
-  existing code and token-level copy-paste. Both passes are seconds and use no
-  embeddings. Use when about to add a helper, when checking a change for
-  duplication, or as the duplication step inside a larger review. For a
-  whole-repo audit, use the heavier `audit-duplicates` skill instead.
+description: Find reusable helpers before coding and review a change for duplication using dupfinder names and token clones. Use audit-duplicates for an explicit whole-repository audit.
 ---
 
 # review-for-duplicates
@@ -22,11 +12,8 @@ extraction, and which duplication is fine.
 **Scope: duplication only.** Correctness, security, performance, and style are
 out of scope here; other reviewers cover those.
 
-Everything in this skill is **embeddings-free and takes seconds**, so it can run
-on every change. The embedding engine (`dupfinder similar` / `review`) is
-deliberately not used — a cold index costs minutes. When you specifically want
-semantic duplication across a whole repo, use the **`audit-duplicates`** skill,
-and only on an explicit request.
+Use `dupfinder review <root> --base <ref>` for combined changed-line clone and
+lexical evidence. Use `audit-duplicates` for an explicit whole-repository audit.
 
 This skill ships with dupfinder itself. Install/update it with
 `dupfinder install-skill` (writes to `~/.claude/skills/`) or
@@ -68,24 +55,13 @@ the token pass, grep for prior art by hand, and say which passes were skipped.
 ```sh
 BASE=<the change's stack parent: the PR base ref if one exists, else origin/main>
 
-# lexical prior art for what the change touches
-"$DF" names <repo-root> --base "$BASE" > /tmp/dup-names.txt
-
-# token-level copy-paste, whole-repo (NOT diff-scoped — filter it yourself)
-"$DF" clones <repo-root> > /tmp/dup-clones.txt
+# lexical prior art and clones overlapping changed lines
+"$DF" review <repo-root> --base "$BASE" --min-lines 1 --top 5
 ```
 
-`--base` omitted auto-resolves to origin/main, origin/master, main, or master —
-first that exists. In a stacked-PR workflow pass the parent branch explicitly, or
-the review covers the whole stack.
-
-Two notes that change how you read the output:
-
-- `names --base` diffs **merge-base(base, HEAD) → working tree**, so uncommitted
-  edits are included. It queries every fn/type *overlapping* changed lines, which
-  is slightly broader than "what this change added".
-- `clones` scans the whole repo. **Filter it to the changed files** and discard
-  pairs that don't touch the change.
+The diff covers merge-base through the working tree, including uncommitted edits.
+Pass the stack parent explicitly; omitted bases try origin/main, origin/master,
+main, and master. `--min-lines 1` retains small helpers and types in this review.
 
 ## Step 2 — Judge the evidence
 
@@ -100,7 +76,7 @@ reading; they never conclude for you.
   `quad`), inverse pairs (`vec3_to_point3`/`point3_to_vec3`), platform twins that
   must differ, language-forced boilerplate. Say why; no finding.
 - **Structurally forced** — trait/interface impls and overrides share names
-  because the trait dictates them. `names` already drops same-name trait impls
+  because the trait dictates them. `names --all` drops same-name trait impls
   and pure forwarding methods; `clones` does not.
 - **Diverged duplicates** are the strongest finding: two implementations of one
   idea whose behavior differs (e.g. one handles Unicode, the other only ASCII).

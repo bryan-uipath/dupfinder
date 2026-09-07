@@ -36,6 +36,7 @@ pub struct TypeRecord {
 }
 
 pub struct Extraction {
+    pub test_regions: Vec<(String, u32, u32)>,
     pub blocks: Vec<crate::blocks::Block>,
     pub fns: Vec<FnRecord>,
     pub types: Vec<TypeRecord>,
@@ -96,7 +97,7 @@ fn extract_with_shapes(root: &Path, structural: bool, scan_blocks: bool) -> Resu
         .collect();
     files.sort();
 
-    let mut ex = Extraction {
+    let mut ex = Extraction { test_regions: vec![],
         blocks: Vec::new(),
         fns: Vec::new(),
         types: Vec::new(),
@@ -222,6 +223,11 @@ fn rust_context(node: Node, src: &str) -> String {
 }
 
 fn walk_rust(node: Node, src: &str, file: &str, ex: &mut Extraction) {
+    if node.kind() == "mod_item" && node.child_by_field_name("name").is_some_and(|n| text(n, src) == "tests") {
+        let mut anchor = node;
+        while let Some(previous) = anchor.prev_named_sibling().filter(|n| n.kind() == "attribute_item") { anchor = previous; }
+        ex.test_regions.push((file.to_string(), anchor.start_position().row as u32 + 1, node.end_position().row as u32 + 1));
+    }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
@@ -620,7 +626,7 @@ mod tests {
         parser.set_language(&tree_sitter_typescript::LANGUAGE_TSX.into()).unwrap();
         let tree = parser.parse(src, None).unwrap();
         assert!(!tree.root_node().has_error());
-        let mut ex = Extraction { blocks: vec![], fns: vec![], types: vec![] };
+        let mut ex = Extraction { test_regions: vec![], blocks: vec![], fns: vec![], types: vec![] };
         walk_ts(tree.root_node(), src, "src/example.tsx", &mut ex, true, true);
         assert_eq!(ex.fns.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
                    vec!["save", "clean", "encode", "hide", "#secret", "View"]);
@@ -636,7 +642,7 @@ mod tests {
         let mut parser = Parser::new();
         parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
         let tree = parser.parse(src, None).unwrap();
-        let mut ex = Extraction { blocks: vec![], fns: vec![], types: vec![] };
+        let mut ex = Extraction { test_regions: vec![], blocks: vec![], fns: vec![], types: vec![] };
         walk_ts(tree.root_node(), src, "src/example.ts", &mut ex, true, true);
         assert!(ex.fns.is_empty());
     }
@@ -652,7 +658,7 @@ mod visibility_tests {
         let mut parser = Parser::new();
         parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
         let tree = parser.parse(src, None).unwrap();
-        let mut ex = Extraction { blocks: vec![], fns: vec![], types: vec![] };
+        let mut ex = Extraction { test_regions: vec![], blocks: vec![], fns: vec![], types: vec![] };
         walk_ts(tree.root_node(), src, "a.ts", &mut ex, true, true);
         let public: Vec<_> = ex.fns.iter().filter(|f| f.public).map(|f| f.name.as_str()).collect();
         assert_eq!(public, vec!["outer", "privateCallback", "privateValue", "quoted", "privateThing"]);
@@ -665,7 +671,7 @@ mod visibility_tests {
         let mut parser = Parser::new();
         parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
         let tree = parser.parse(src, None).unwrap();
-        let mut ex = Extraction { blocks: vec![], fns: vec![], types: vec![] };
+        let mut ex = Extraction { test_regions: vec![], blocks: vec![], fns: vec![], types: vec![] };
         walk_ts(tree.root_node(), src, "a.ts", &mut ex, true, true);
         assert_eq!(ex.fns.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["fn"]);
     }

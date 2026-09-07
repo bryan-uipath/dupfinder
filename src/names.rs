@@ -335,6 +335,7 @@ mod tests {
     #[test]
     fn test_file_types_are_not_production_candidates() {
         let ex = Extraction {
+            test_regions: vec![],
             blocks: Vec::new(),
             fns: vec![],
             types: vec![crate::extract::TypeRecord {

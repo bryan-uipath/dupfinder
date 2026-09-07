@@ -166,6 +166,13 @@ pub fn run(
 }
 
 fn test_region(file: &str, range: (u32, u32), ex: &extract::Extraction) -> bool {
+    if ex
+        .test_regions
+        .iter()
+        .any(|(f, start, end)| f == file && *start <= range.0 && *end >= range.1)
+    {
+        return true;
+    }
     let overlapping: Vec<_> = ex
         .fns
         .iter()
@@ -354,6 +361,7 @@ mod tests {
             ..a.clone()
         };
         let ex = extract::Extraction {
+            test_regions: vec![],
             fns: vec![],
             types: vec![],
             blocks: vec![],

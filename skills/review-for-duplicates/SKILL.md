@@ -55,24 +55,13 @@ the token pass, grep for prior art by hand, and say which passes were skipped.
 ```sh
 BASE=<the change's stack parent: the PR base ref if one exists, else origin/main>
 
-# lexical prior art for what the change touches
-"$DF" names <repo-root> --base "$BASE" > /tmp/dup-names.txt
-
-# token-level copy-paste, whole-repo (NOT diff-scoped — filter it yourself)
-"$DF" clones <repo-root> > /tmp/dup-clones.txt
+# lexical prior art and clones overlapping changed lines
+"$DF" review <repo-root> --base "$BASE" --min-lines 1 --top 5
 ```
 
-`--base` omitted auto-resolves to origin/main, origin/master, main, or master —
-first that exists. In a stacked-PR workflow pass the parent branch explicitly, or
-the review covers the whole stack.
-
-Two notes that change how you read the output:
-
-- `names --base` diffs **merge-base(base, HEAD) → working tree**, so uncommitted
-  edits are included. It queries every fn/type *overlapping* changed lines, which
-  is slightly broader than "what this change added".
-- `clones` scans the whole repo. **Filter it to changed line ranges** and discard
-  pairs that don't touch the change.
+The diff covers merge-base through the working tree, including uncommitted edits.
+Pass the stack parent explicitly; omitted bases try origin/main, origin/master,
+main, and master. `--min-lines 1` retains small helpers and types in this review.
 
 ## Step 2 — Judge the evidence
 

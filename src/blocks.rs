@@ -6,6 +6,7 @@ use tree_sitter::Node;
 pub struct Block {
     pub file: String,
     pub start: u32,
+    pub bytes: std::ops::Range<usize>,
     pub end: u32,
     pub shape: normalized::Shape,
 }
@@ -25,6 +26,7 @@ pub fn extract(node: Node, src: &str, file: &str, out: &mut Vec<Block>) {
         if let Some(shape) = normalized::statements(window, src) {
             out.push(Block {
                 file: file.to_string(),
+                bytes: window[0].start_byte()..window[2].end_byte(),
                 start: window[0].start_position().row as u32 + 1,
                 end: window[2].end_position().row as u32 + 1,
                 shape,
@@ -44,7 +46,8 @@ pub fn pairs(blocks: &[Block], min_tokens: usize, include_tests: bool) -> Vec<Bl
     for records in groups.values() {
         for (i, &a) in records.iter().enumerate() {
             for &b in &records[i + 1..] {
-                if a.file != b.file || a.end < b.start || b.end < a.start {
+                if a.file != b.file || a.bytes.end <= b.bytes.start || b.bytes.end <= a.bytes.start
+                {
                     pairs.push(BlockPair { a, b });
                 }
             }
@@ -82,6 +85,27 @@ mod tests {
         let mut blocks = Vec::new();
         extract(body, src, file, &mut blocks);
         blocks
+    }
+
+    #[test]
+    fn detects_byte_disjoint_windows_on_one_line() {
+        let src = "function a(){alpha(one,two,three);beta(four,five,six);gamma(seven,eight,nine);} function b(){alpha(one,two,three);beta(four,five,six);gamma(seven,eight,nine);}";
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        let mut blocks = Vec::new();
+        let mut cursor = tree.root_node().walk();
+        for function in tree.root_node().named_children(&mut cursor) {
+            extract(
+                function.child_by_field_name("body").unwrap(),
+                src,
+                "a.ts",
+                &mut blocks,
+            );
+        }
+        assert_eq!(pairs(&blocks, 20, false).len(), 1);
     }
 
     #[test]

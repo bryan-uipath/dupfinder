@@ -29,6 +29,7 @@ pub struct TypeRecord {
     pub doc: String,
     pub file: String,
     pub start: u32,
+    pub end: u32,
     pub public: bool,
 }
 
@@ -244,6 +245,7 @@ fn walk_rust(node: Node, src: &str, file: &str, ex: &mut Extraction) {
                         doc: rust_doc_before(child, src),
                         file: file.to_string(),
                         start: child.start_position().row as u32 + 1,
+                        end: child.end_position().row as u32 + 1,
 
                         public: head.starts_with("pub"),
                     });
@@ -401,6 +403,7 @@ fn walk_ts(node: Node, src: &str, file: &str, ex: &mut Extraction) {
                         doc: ts_doc_before(ts_doc_anchor(child), src),
                         file: file.to_string(),
                         start: child.start_position().row as u32 + 1,
+                        end: child.end_position().row as u32 + 1,
 
                         public: ts_is_exported(child),
                     });
@@ -465,6 +468,7 @@ fn extract_functor(src: &str, file: &str, ex: &mut Extraction) {
                 doc: doc_parts.join(" "),
                 file: file.to_string(),
                 start: *i as u32 + 1,
+                end: end as u32,
 
                 public: true,
             });

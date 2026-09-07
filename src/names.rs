@@ -268,7 +268,7 @@ pub fn candidates(ex: &Extraction) -> Vec<Candidate> {
             },
             file: t.file.clone(),
             start: t.start,
-            end: t.start,
+            end: t.end,
             doc: t.doc.clone(),
             testish: crate::extract::is_test_file(&t.file),
             trait_impl: false,
@@ -315,10 +315,14 @@ mod tests {
                 doc: String::new(),
                 file: "src/widget.test.tsx".into(),
                 start: 1,
+                end: 20,
                 public: false,
             }],
         };
-        assert!(candidates(&ex)[0].testish);
+        let candidate = &candidates(&ex)[0];
+        assert!(candidate.testish);
+        assert_eq!(candidate.end, 20);
+        assert!(crate::gitdiff::overlaps(&[(10, 10)], candidate.start, candidate.end));
     }
 
     #[test]

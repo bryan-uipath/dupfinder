@@ -46,7 +46,7 @@ pub fn run_jscpd(root: &Path) -> Result<Option<Vec<TokenClone>>> {
     };
     let out_dir = std::env::temp_dir().join(format!("dupfinder-jscpd-{}", std::process::id()));
     cmd.current_dir(&root)
-        .args(["--reporters", "json", "--silent", "--output"])
+        .args(["--absolute", "--reporters", "json", "--silent", "--output"])
         .arg(&out_dir);
     // Honor the repo's own jscpd config when present; otherwise sane defaults.
     if !root.join(".jscpd.json").exists() {

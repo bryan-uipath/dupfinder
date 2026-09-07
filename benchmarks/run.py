@@ -7,6 +7,7 @@ import os
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import time
 
@@ -24,27 +25,45 @@ def main():
     root = (args.root or Path(__file__).parent / 'corpus').resolve()
     label_path = args.labels or (Path(__file__).parent / 'labels.json' if args.root is None else None)
     labels = json.loads(label_path.read_text()) if label_path else []
+    labels = [label for label in labels if not any(
+        fnmatch.fnmatchcase(label[side]['file'], pattern)
+        for side in ['a', 'b'] for pattern in args.exclude)]
     binary = args.binary.resolve()
+    if args.out.resolve().is_relative_to(root):
+        parser.error('--out must be outside the scanned root to avoid changing the corpus')
+    selected_engines = list(dict.fromkeys(args.engine or ['names', 'clones']))
+    clone_version = None
+    if 'clones' in selected_engines or 'audit' in selected_engines:
+        for command in [['jscpd', '--version'], ['npx', '--yes', 'jscpd', '--version']]:
+            if shutil.which(command[0]):
+                probe = subprocess.run(command, text=True, capture_output=True, timeout=120)
+                if probe.returncode == 0:
+                    clone_version = probe.stdout.strip()
+                    break
     digest = hashlib.sha256()
     for directory, dirs, files in os.walk(root):
         dirs[:] = sorted(d for d in dirs if d not in ['.git', 'node_modules', 'target', 'dist', 'build', 'vendor'])
         for name in sorted(files):
             path = Path(directory) / name
-            if path.suffix not in ['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs', '.rs', '.fun']:
-                continue
             relative = path.relative_to(root).as_posix()
-            if any(fnmatch.fnmatchcase(relative, pattern) for pattern in args.exclude):
+            if path.name not in ['.jscpd.json', '.gitignore', '.ignore'] and any(
+                    fnmatch.fnmatchcase(relative, pattern) for pattern in args.exclude):
                 continue
             digest.update(relative.encode() + b'\0' + path.read_bytes() + b'\0')
+    local_ignore = root / '.git' / 'info' / 'exclude'
+    if local_ignore.is_file():
+        digest.update(b'.git/info/exclude\0' + local_ignore.read_bytes())
     fingerprint = digest.hexdigest()
     labels_fingerprint = hashlib.sha256(json.dumps(labels, sort_keys=True).encode()).hexdigest()
     previous = json.loads(args.previous.read_text()) if args.previous else None
     if previous and (previous['fingerprint'] != fingerprint or previous['excludes'] != args.exclude
                      or previous['labels_fingerprint'] != labels_fingerprint):
         parser.error('previous run has a different corpus, labels, or exclusion scope')
+    if previous and previous.get('clone_version') and clone_version != previous['clone_version']:
+        parser.error('clone backend changed; capture a new baseline')
     records = []
     engines = {}
-    for engine in args.engine or ['names', 'clones']:
+    for engine in selected_engines:
         command = [str(binary), engine, str(root)]
         if engine == 'names':
             command += ['--all', '--min-score', '0.5', '--top', '1000000']
@@ -87,7 +106,10 @@ def main():
         }
     keys = {pair_key(pair) for pair in records}
     old_keys = {pair_key(pair) for pair in previous['pairs']} if previous else set()
-    report = {'root': str(root), 'binary': str(binary), 'fingerprint': fingerprint, 'labels_fingerprint': labels_fingerprint, 'excludes': args.exclude,
+    report = {'root': str(root), 'binary': str(binary), 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+              'selected_engines': selected_engines, 'clone_version': clone_version,
+              'comparison': ('same-engines' if selected_engines == previous['selected_engines'] else 'changed-engines') if previous else None,
+              'fingerprint': fingerprint, 'labels_fingerprint': labels_fingerprint, 'excludes': args.exclude,
               'engines': engines, 'labeled_metrics': metrics, 'label_hits': found,
               'unique_pairs': len(keys),
               'additional_pairs': len(keys - old_keys) if previous else None,

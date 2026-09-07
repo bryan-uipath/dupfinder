@@ -15,8 +15,8 @@ synthetic detection examples, not proof of production usefulness.
 
 Use `--root` and `--labels` for another corpus. Omitting `--labels` for a custom
 root produces candidate counts only. Freeze the checkout before comparing runs.
-The runner hashes source paths/content and refuses comparisons with a different
-corpus or exclusion list. Logs and full pair evidence are saved beside the report.
+The runner hashes file paths/content and records the executable SHA-256 and clone backend version and refuses comparisons with a different
+corpus, labels, or exclusion list. Logs and full pair evidence are saved beside the report; place outputs outside the scanned root.
 
 `--engine` is repeatable. Default: `names`, `clones`. Later detector commands can
 be evaluated using `--engine bodies`, `--engine blocks`, or `--engine audit`.
@@ -39,5 +39,5 @@ Read the metrics separately:
   controlled runs are needed for performance claims.
 
 Compare identical engine sets for implementation changes; adding an engine
-measures cumulative coverage. Keep corpus and labels unchanged across the stack.
+measures cumulative coverage and is explicitly marked `changed-engines`. Keep corpus and labels unchanged across the stack.
 Private source and detailed internal findings belong outside public PRs.

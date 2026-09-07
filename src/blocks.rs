@@ -47,8 +47,7 @@ pub fn pairs(
     for records in families(blocks, min_tokens, include_tests) {
         for (i, &a) in records.iter().enumerate() {
             for &b in &records[i + 1..] {
-                if a.file != b.file || a.bytes.end <= b.bytes.start || b.bytes.end <= a.bytes.start
-                {
+                if !overlaps(a, b) {
                     total += 1;
                     let key = (
                         Reverse(a.shape.leaves),

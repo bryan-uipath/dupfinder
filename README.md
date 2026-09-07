@@ -60,7 +60,10 @@ maintenance savings. Agreement between the two detectors strengthens a candidate
 ## Languages and scope
 
 - Rust: tree-sitter functions and types, including impl/trait/module context.
-- TypeScript/JavaScript/TSX/JSX: functions, methods, arrow bindings, and types.
+- TypeScript/JavaScript/TSX/JSX: functions, methods, arrow bindings, object-property
+  functions, class-field functions, and types. Named bindings wrapping callbacks in React-imported `useCallback`,
+  `memo`, and `forwardRef` (including import aliases and namespace forms) are indexed. Other calls such
+  as `useMemo` and `map` are not assumed to return their callback.
 - Functor (`.fun`): top-level `let` and `type` bindings.
 
 The extractor respects gitignore and skips `.d.ts`, hidden files, dependencies,

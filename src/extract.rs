@@ -382,15 +382,18 @@ fn walk_ts(node: Node, src: &str, file: &str, ex: &mut Extraction) {
                     push_ts_fn(ex, child, name, body, child, src, file, !private);
                 }
             }
-            "variable_declarator" => {
+            "variable_declarator" | "pair" | "public_field_definition" => {
+                let name_field = if child.kind() == "pair" { "key" } else { "name" };
                 if let (Some(name), Some(value)) =
-                    (child.child_by_field_name("name"), child.child_by_field_name("value"))
+                    (child.child_by_field_name(name_field), child.child_by_field_name("value"))
                 {
-                    if matches!(value.kind(), "arrow_function" | "function_expression")
-                        && name.kind() == "identifier"
-                    {
-                        let body = value.child_by_field_name("body");
-                        push_ts_fn(ex, child, name, body, child, src, file, ts_is_exported(child));
+                    if matches!(name.kind(), "identifier" | "property_identifier" | "private_property_identifier") {
+                        if let Some(callable) = ts_callable(value, src) {
+                            let body = callable.child_by_field_name("body");
+                            let private = text(child, src).trim_start().starts_with("private")
+                                || text(name, src).starts_with('#');
+                            push_ts_fn(ex, child, name, body, child, src, file, !private && ts_is_exported(child));
+                        }
                     }
                 }
             }
@@ -412,6 +415,25 @@ fn walk_ts(node: Node, src: &str, file: &str, ex: &mut Extraction) {
             _ => {}
         }
         walk_ts(child, src, file, ex);
+    }
+}
+
+/// Only unwrap APIs whose first argument is the callable being named.
+fn ts_callable<'a>(mut value: Node<'a>, src: &str) -> Option<Node<'a>> {
+    loop {
+        match value.kind() {
+            "arrow_function" | "function_expression" => return Some(value),
+            "call_expression" => {
+                let callee = text(value.child_by_field_name("function")?, src);
+                if !matches!(callee, "useCallback" | "React.useCallback" | "memo" | "React.memo" | "forwardRef" | "React.forwardRef") {
+                    return None;
+                }
+                let args = value.child_by_field_name("arguments")?;
+                let mut cursor = args.walk();
+                value = args.named_children(&mut cursor).find(|n| n.kind() != "comment")?;
+            }
+            _ => return None,
+        }
     }
 }
 
@@ -501,5 +523,38 @@ fn ident_prefix(s: &str) -> Option<String> {
         Some(name)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_wrappers_properties_and_fields_once_with_ranges() {
+        let src = "export const save = React.useCallback((value: string) => {\n  return value.trim();\n}, []);\nexport const api = { clean: (x: string) => x.trim() };\nexport class Store {\n  encode = (x: string) => x.toLowerCase();\n  private hide = () => 1;\n  #secret = () => 2;\n}\nexport const View = memo(forwardRef((props, ref) => props.title));\nconst result = useMemo(() => 42, []);\nconst mapped = items.map(x => x.id);\n";
+        let mut parser = Parser::new();
+        parser.set_language(&tree_sitter_typescript::LANGUAGE_TSX.into()).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert!(!tree.root_node().has_error());
+        let mut ex = Extraction { fns: vec![], types: vec![] };
+        walk_ts(tree.root_node(), src, "src/example.tsx", &mut ex);
+        assert_eq!(ex.fns.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+                   vec!["save", "clean", "encode", "hide", "#secret", "View"]);
+        assert_eq!((ex.fns[0].start, ex.fns[0].end), (1, 3));
+        assert!(ex.fns[0].sig.contains("value: string"));
+        assert!(!ex.fns[3].public);
+        assert!(!ex.fns[4].public);
+    }
+
+    #[test]
+    fn ignores_computed_names_and_non_callable_initializers() {
+        let src = "const api = { [key]: () => 1, value: makeThing(() => 2) }; class A { data = 1; }";
+        let mut parser = Parser::new();
+        parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        let mut ex = Extraction { fns: vec![], types: vec![] };
+        walk_ts(tree.root_node(), src, "src/example.ts", &mut ex);
+        assert!(ex.fns.is_empty());
     }
 }

@@ -10,6 +10,7 @@ Results are evidence for human or agent review: read both sides before recommend
 | `names --base REF` | Find lexical neighbors of changed functions/types |
 | `names --all` | Rank name/type overlap across a repository |
 | `clones` | Find copied token sequences using jscpd |
+| `bodies` | Match normalized TypeScript/JavaScript function bodies |
 | `review --base REF` | Combine changed-line token clones and lexical prior art |
 
 ## Install
@@ -29,6 +30,7 @@ dupfinder names [DIR] --name parseManifest --name loadManifest
 dupfinder names [DIR] --base origin/main --top 5 --min-score 0.3
 dupfinder names [DIR] --all --top 40 --min-score 0.5 --exclude 'examples/**'
 dupfinder clones [DIR]
+dupfinder bodies [DIR] --min-tokens 30 --top 40 [--json] [--exclude GLOB]
 dupfinder review [DIR] --base origin/main --top 3 --min-lines 5
 dupfinder install-skill [--project] [--dir DIR]
 ```
@@ -86,3 +88,16 @@ deleted manually.
 
 Use the [labeled benchmark](benchmarks/README.md) to compare coverage, false-positive
 candidates, and runtime on a fixed corpus before tuning or adding detectors.
+
+## Normalized bodies
+
+`bodies` compares TypeScript/JavaScript syntax with parameter/local binding names
+normalized. It preserves operators, literals, properties, external references,
+parameter types, async status, and function syntax kind. Results are hypotheses
+for review, not semantic-equivalence guarantees.
+
+The first version abstains on destructuring, shadowed bindings, nested callables,
+classes inside functions, `var`, and direct `eval`. Rust/Functor remain supported
+by names/index and the available token-clone backend, not this detector.
+`--include-tests`, repeatable `--exclude`, and `--json` support scoped experiments.
+The token minimum counts AST leaves, excluding comments and semicolons.

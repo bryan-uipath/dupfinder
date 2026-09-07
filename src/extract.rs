@@ -14,6 +14,7 @@ pub struct FnRecord {
     pub sig: String,
     pub doc: String,
     pub body: String,
+    pub shape: Option<crate::normalized::Shape>,
     /// Root-relative path, '/'-separated.
     pub file: String,
     /// 1-based lines.
@@ -230,6 +231,7 @@ fn walk_rust(node: Node, src: &str, file: &str, ex: &mut Extraction) {
                         public: sig.starts_with("pub"),
                         sig,
                         body: body.to_string(),
+                        shape: None,
                         file: file.to_string(),
                         start,
                         end,
@@ -356,6 +358,7 @@ fn push_ts_fn(ex: &mut Extraction, node: Node, name_node: Node, body_node: Optio
         sig: collapse_ws(&full[..sig_end]),
         doc: ts_doc_before(ts_doc_anchor(node), src),
         body: full.to_string(),
+        shape: body_node.and_then(|body| body.parent()).and_then(|callable| crate::normalized::function(callable, src)),
         file: file.to_string(),
         start,
         end,
@@ -504,6 +507,7 @@ fn extract_functor(src: &str, file: &str, ex: &mut Extraction) {
             sig: lines[*i].trim().to_string(),
             doc: doc_parts.join(" "),
             body,
+            shape: None,
             file: file.to_string(),
             start: *i as u32 + 1,
             end: end as u32,

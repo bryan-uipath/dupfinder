@@ -6,6 +6,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 mod clones;
+mod normalized;
+mod bodies;
 mod extract;
 mod gitdiff;
 mod names;
@@ -35,6 +37,21 @@ enum Cmd {
     Clones {
         #[arg(default_value = ".")]
         path: PathBuf,
+    },
+    /// Match normalized TypeScript/JavaScript bodies despite renamed local bindings
+    Bodies {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long, default_value_t = 30)]
+        min_tokens: usize,
+        #[arg(long, default_value_t = 40)]
+        top: usize,
+        #[arg(long)]
+        include_tests: bool,
+        #[arg(long = "exclude")]
+        excludes: Vec<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Lexical prior-art search: rank existing fns/types by identifier-token
     /// (Jaccard) similarity to what a change adds. No model required.
@@ -97,6 +114,27 @@ fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Index { path, private, out } => cmd_index(&path, private, out),
         Cmd::Clones { path } => cmd_clones(&path),
+        Cmd::Bodies { path, min_tokens, top, include_tests, excludes, json } => {
+            let mut ex = extract::extract_dir(&path)?;
+            let globs = build_globs(&excludes)?;
+            ex.fns.retain(|r| !globs.is_match(&r.file));
+            let pairs = bodies::pairs(&ex, min_tokens, include_tests);
+            let shaped = ex.fns.iter().filter(|r| r.shape.as_ref().is_some_and(|shape| shape.leaves >= min_tokens) && (include_tests || !r.is_testish())).count();
+            if json {
+                let output: Vec<_> = pairs.iter().take(top).map(|p| serde_json::json!({
+                    "a": bodies::location(p.a), "b": bodies::location(p.b), "tokens": p.tokens,
+                    "evidence": ["body"]
+                })).collect();
+                println!("{}", serde_json::json!({"eligible_functions": shaped, "total_pairs": pairs.len(), "pairs": output}));
+            } else {
+                println!("# normalized bodies ({} eligible functions, {} pairs)\n", shaped, pairs.len());
+                for pair in pairs.iter().take(top) {
+                    println!("{}:{}-{} <-> {}:{}-{} ({} tokens)", pair.a.file, pair.a.start, pair.a.end,
+                             pair.b.file, pair.b.start, pair.b.end, pair.tokens);
+                }
+            }
+            Ok(())
+        }
         Cmd::Names {
             path,
             base,

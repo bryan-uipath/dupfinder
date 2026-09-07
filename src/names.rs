@@ -1,11 +1,6 @@
 //! Lexical prior-art search: Jaccard similarity over identifier tokens.
 //!
-//! This is the cheap prefilter that sits between "grep the API index by hand"
-//! and the embedding index. Splitting `find_nearest_cell` into
-//! `{find, near, cell}` and intersecting token sets prunes thousands of items
-//! to a handful of ranked candidates in milliseconds — no model, no `.dupfinder/`
-//! store. It catches duplicates that *talk* alike; it cannot catch ones that only
-//! *think* alike (that's what `similar`/`review` embeddings are for).
+//! Ranks shared vocabulary as evidence for a reviewer, not proof of duplication.
 
 use crate::extract::Extraction;
 use std::collections::BTreeSet;
@@ -275,7 +270,7 @@ pub fn candidates(ex: &Extraction) -> Vec<Candidate> {
             start: t.start,
             end: t.start,
             doc: t.doc.clone(),
-            testish: false,
+            testish: crate::extract::is_test_file(&t.file),
             trait_impl: false,
             delegating: false,
             name_tokens: tokenize(&t.name),
@@ -308,6 +303,36 @@ mod tests {
 
     fn set(items: &[&str]) -> BTreeSet<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_file_types_are_not_production_candidates() {
+        let ex = Extraction {
+            fns: vec![],
+            types: vec![crate::extract::TypeRecord {
+                name: "MockResponse".into(),
+                kind: "interface".into(),
+                doc: String::new(),
+                file: "src/widget.test.tsx".into(),
+                start: 1,
+                public: false,
+            }],
+        };
+        assert!(candidates(&ex)[0].testish);
+    }
+
+    #[test]
+    fn test_paths_cover_root_directories_and_jsx() {
+        for file in [
+            "tests/a.rs",
+            "src/__tests__/a.ts",
+            "src/a.test.tsx",
+            "src/a.spec.jsx",
+        ] {
+            assert!(crate::extract::is_test_file(file), "{file}");
+        }
+        assert!(!crate::extract::is_test_file("src/contest.ts"));
+        assert!(!crate::extract::is_test_file("src/testUtils.ts"));
     }
 
     #[test]

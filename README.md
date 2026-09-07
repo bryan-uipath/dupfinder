@@ -78,3 +78,8 @@ skills directory. Sources live in `skills/` and ship inside the binary.
 `embed` and `similar` have been removed; `review` now uses names and clones.
 Existing `.dupfinder/` and `.fastembed_cache/` directories are unused and may be
 deleted manually.
+
+## Evaluate detector changes
+
+Use the [labeled benchmark](benchmarks/README.md) to compare coverage, false-positive
+candidates, and runtime on a fixed corpus before tuning or adding detectors.

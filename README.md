@@ -107,3 +107,9 @@ The token minimum counts AST leaves, excluding comments and semicolons.
 `dupfinder blocks . --json` finds repeated windows of three adjacent TS/JS statements (20 tokens minimum). It can find a shared middle section even when the surrounding functions differ. Window-local bindings are normalized; enclosing names, properties, literals, and operators stay literal. Unsupported scopes use the same conservative abstention as bodies. Nested statement blocks are scanned independently, including anonymous callbacks.
 
 `--min-tokens`, `--top`, `--include-tests`, and repeated `--exclude` control output. Long duplicates can yield overlapping windows; these are evidence fragments, not separate cleanup tasks. Switch-case lists and regions with fewer than three statements are outside this detector's scope.
+
+### Grouped audit
+
+`dupfinder audit . --json` combines the existing name threshold (0.5), normalized bodies (30 tokens), statement windows (20 tokens), and configured jscpd clones. Repeated `--exclude` and `--include-tests` apply to every engine's results; jscpd still scans its configured scope before filtering.
+
+Structural pairs form connected review groups, using the smallest enclosing named function where available. Name-only edges cannot connect different groups. Rank prefers the number of structural evidence kinds, then matched lines, then name score; it is not a probability of safe extraction. A group can contain different shared fragments, not mutually interchangeable functions. `--top` limits groups. JSON retains the original fragments for representative spanning links (not every equivalent pair) and reports clone-backend availability. Equivalent structural families use linear stored links; overlapping windows may still require quadratic comparisons. Grouping adds no detection engine; compare review effort as well as candidate totals.

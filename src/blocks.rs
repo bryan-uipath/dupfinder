@@ -1,6 +1,7 @@
 //! Fixed statement windows keep indexing linear in the number of statements.
 use crate::{extract::is_test_file, normalized};
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, HashMap};
 use tree_sitter::Node;
 
 pub struct Block {
@@ -35,35 +36,51 @@ pub fn extract(node: Node, src: &str, file: &str, out: &mut Vec<Block>) {
     }
 }
 
-pub fn pairs(blocks: &[Block], min_tokens: usize, include_tests: bool) -> Vec<BlockPair<'_>> {
+pub fn pairs(
+    blocks: &[Block],
+    min_tokens: usize,
+    include_tests: bool,
+    limit: usize,
+) -> (usize, Vec<BlockPair<'_>>) {
     let mut groups: HashMap<&[String], Vec<&Block>> = HashMap::new();
     for block in blocks {
         if block.shape.leaves >= min_tokens && (include_tests || !is_test_file(&block.file)) {
             groups.entry(&block.shape.tokens).or_default().push(block);
         }
     }
-    let mut pairs = Vec::new();
+    let mut pairs = BTreeMap::new();
+    let mut total = 0;
     for records in groups.values() {
         for (i, &a) in records.iter().enumerate() {
             for &b in &records[i + 1..] {
                 if a.file != b.file || a.bytes.end <= b.bytes.start || b.bytes.end <= a.bytes.start
                 {
-                    pairs.push(BlockPair { a, b });
+                    total += 1;
+                    let key = (
+                        Reverse(a.shape.leaves),
+                        a.file.as_str(),
+                        a.bytes.start,
+                        b.file.as_str(),
+                        b.bytes.start,
+                    );
+                    if limit > 0
+                        && (pairs.len() < limit
+                            || pairs.last_key_value().is_some_and(|(last, _)| &key < last))
+                    {
+                        pairs.insert(key, BlockPair { a, b });
+                        if pairs.len() > limit {
+                            pairs.pop_last();
+                        }
+                    }
                 }
             }
         }
     }
-    pairs.sort_by(|a, b| {
-        b.a.shape.leaves.cmp(&a.a.shape.leaves).then_with(|| {
-            (&a.a.file, a.a.start, &a.b.file, a.b.start)
-                .cmp(&(&b.a.file, b.a.start, &b.b.file, b.b.start))
-        })
-    });
-    pairs
+    (total, pairs.into_values().collect())
 }
 
 pub fn location(block: &Block) -> serde_json::Value {
-    serde_json::json!({"file": block.file, "start": block.start, "end": block.end})
+    serde_json::json!({"file": block.file, "start": block.start, "end": block.end, "start_byte": block.bytes.start, "end_byte": block.bytes.end})
 }
 
 #[cfg(test)]
@@ -105,16 +122,20 @@ mod tests {
                 &mut blocks,
             );
         }
-        assert_eq!(pairs(&blocks, 20, false).len(), 1);
+        assert_eq!(pairs(&blocks, 20, false, usize::MAX).1.len(), 1);
+        let (_, found) = pairs(&blocks, 20, false, 1);
+        assert_ne!(location(found[0].a), location(found[0].b));
+        assert_eq!(pairs(&blocks, 20, false, 0).0, 1);
+        assert!(pairs(&blocks, 20, false, 0).1.is_empty());
     }
 
     #[test]
     fn finds_internal_windows_despite_different_surrounding_statements() {
         let mut blocks = scan("function a() { before(); const x = input.trim(); const y = codec.encode(x); save(y); after(); }", "a.ts");
         blocks.extend(scan("function b() { other(); const clean = input.trim(); const result = codec.encode(clean); save(result); finish(); }", "b.ts"));
-        let found = pairs(&blocks, 20, false);
+        let found = pairs(&blocks, 20, false, usize::MAX).1;
         assert_eq!(found.len(), 1);
-        assert!(pairs(&blocks, 100, false).is_empty());
+        assert!(pairs(&blocks, 100, false, usize::MAX).1.is_empty());
     }
 
     #[test]
@@ -131,7 +152,7 @@ mod tests {
             "function c() { const x = input.trim(); const y = codec.encode(x); save(y); }",
             "a.test.ts",
         ));
-        assert!(pairs(&blocks, 20, false).is_empty());
-        assert_eq!(pairs(&blocks, 20, true).len(), 1);
+        assert!(pairs(&blocks, 20, false, usize::MAX).1.is_empty());
+        assert_eq!(pairs(&blocks, 20, true, usize::MAX).1.len(), 1);
     }
 }

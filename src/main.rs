@@ -131,19 +131,19 @@ fn main() -> Result<()> {
         Cmd::Index { path, private, out } => cmd_index(&path, private, out),
         Cmd::Clones { path } => cmd_clones(&path),
         Cmd::Bodies { path, min_tokens, top, include_tests, excludes, json } => {
-            let mut ex = extract::extract_dir(&path)?;
+            let mut ex = extract::extract_structural(&path)?;
             let globs = build_globs(&excludes)?;
             ex.fns.retain(|r| !globs.is_match(&r.file));
-            let pairs = bodies::pairs(&ex, min_tokens, include_tests);
+            let (total, pairs) = bodies::pairs(&ex, min_tokens, include_tests, top);
             let shaped = ex.fns.iter().filter(|r| r.shape.as_ref().is_some_and(|shape| shape.leaves >= min_tokens) && (include_tests || !r.is_testish())).count();
             if json {
                 let output: Vec<_> = pairs.iter().take(top).map(|p| serde_json::json!({
                     "a": bodies::location(p.a), "b": bodies::location(p.b), "tokens": p.tokens,
                     "evidence": ["body"]
                 })).collect();
-                println!("{}", serde_json::json!({"eligible_functions": shaped, "total_pairs": pairs.len(), "pairs": output}));
+                println!("{}", serde_json::json!({"eligible_functions": shaped, "total_pairs": total, "pairs": output}));
             } else {
-                println!("# normalized bodies ({} eligible functions, {} pairs)\n", shaped, pairs.len());
+                println!("# normalized bodies ({} eligible functions, {} pairs)\n", shaped, total);
                 for pair in pairs.iter().take(top) {
                     println!("{}:{}-{} <-> {}:{}-{} ({} tokens)", pair.a.file, pair.a.start, pair.a.end,
                              pair.b.file, pair.b.start, pair.b.end, pair.tokens);
@@ -152,7 +152,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Blocks { path, min_tokens, top, include_tests, excludes, json } => {
-            let mut ex = extract::extract_dir(&path)?;
+            let mut ex = extract::extract_structural(&path)?;
             let globs = build_globs(&excludes)?;
             ex.blocks.retain(|r| !globs.is_match(&r.file));
             let pairs = blocks::pairs(&ex.blocks, min_tokens, include_tests);

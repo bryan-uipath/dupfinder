@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--previous', type=Path)
     parser.add_argument('--out', required=True, type=Path)
     args = parser.parse_args()
+    args.exclude = sorted(set(args.exclude))
     root = (args.root or Path(__file__).parent / 'corpus').resolve()
     label_path = args.labels or (Path(__file__).parent / 'labels.json' if args.root is None else None)
     labels = json.loads(label_path.read_text()) if label_path else []
@@ -42,7 +43,8 @@ def main():
                     break
     digest = hashlib.sha256()
     for directory, dirs, files in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if d not in ['.git', 'node_modules', 'target', 'dist', 'build', 'vendor'])
+        skipped_dirs = ['.git'] if (root / '.jscpd.json').exists() else ['.git', 'node_modules', 'target', 'dist', 'build']
+        dirs[:] = sorted(d for d in dirs if d not in skipped_dirs)
         for name in sorted(files):
             path = Path(directory) / name
             relative = path.relative_to(root).as_posix()
@@ -59,7 +61,8 @@ def main():
     if previous and (previous['fingerprint'] != fingerprint or previous['excludes'] != args.exclude
                      or previous['labels_fingerprint'] != labels_fingerprint):
         parser.error('previous run has a different corpus, labels, or exclusion scope')
-    if previous and previous.get('clone_version') and clone_version != previous['clone_version']:
+    if previous and any(e in ['clones', 'audit'] for e in previous['selected_engines']) and any(
+            e in ['clones', 'audit'] for e in selected_engines) and clone_version != previous['clone_version']:
         parser.error('clone backend changed; capture a new baseline')
     records = []
     engines = {}
@@ -73,10 +76,12 @@ def main():
             for pattern in args.exclude:
                 command += ['--exclude', pattern]
         started = time.perf_counter()
-        result = subprocess.run(command, text=True, capture_output=True, check=True)
+        result = subprocess.run(command, text=True, capture_output=True)
         elapsed = time.perf_counter() - started
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.with_suffix(f'.{engine}.txt').write_text(result.stdout + result.stderr)
+        if result.returncode != 0:
+            parser.error(f'{engine} failed: {result.stderr.strip()} (see captured log)')
         if engine == 'clones' and '# token clones' not in result.stdout:
             engines[engine] = {'status': 'unavailable', 'seconds': round(elapsed, 3)}
             continue

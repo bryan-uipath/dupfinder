@@ -1,0 +1,182 @@
+[
+  {
+    "id": "same_helper",
+    "split": "dev",
+    "actionable": true,
+    "a": {
+      "file": "same_helper/a.ts",
+      "start": 1,
+      "end": 16
+    },
+    "b": {
+      "file": "same_helper/b.ts",
+      "start": 1,
+      "end": 16
+    }
+  },
+  {
+    "id": "wrapped_callback",
+    "split": "dev",
+    "actionable": true,
+    "a": {
+      "file": "wrapped_callback/a.ts",
+      "start": 1,
+      "end": 6
+    },
+    "b": {
+      "file": "wrapped_callback/b.ts",
+      "start": 1,
+      "end": 6
+    }
+  },
+  {
+    "id": "renamed_locals",
+    "split": "dev",
+    "actionable": true,
+    "a": {
+      "file": "renamed_locals/a.ts",
+      "start": 1,
+      "end": 7
+    },
+    "b": {
+      "file": "renamed_locals/b.ts",
+      "start": 1,
+      "end": 7
+    }
+  },
+  {
+    "id": "object_arrow",
+    "split": "dev",
+    "actionable": true,
+    "a": {
+      "file": "object_arrow/a.ts",
+      "start": 2,
+      "end": 6
+    },
+    "b": {
+      "file": "object_arrow/b.ts",
+      "start": 2,
+      "end": 6
+    }
+  },
+  {
+    "id": "shared_block",
+    "split": "dev",
+    "actionable": true,
+    "a": {
+      "file": "shared_block/a.ts",
+      "start": 1,
+      "end": 8
+    },
+    "b": {
+      "file": "shared_block/b.ts",
+      "start": 1,
+      "end": 8
+    }
+  },
+  {
+    "id": "literal_difference",
+    "split": "dev",
+    "actionable": false,
+    "a": {
+      "file": "literal_difference/a.ts",
+      "start": 1,
+      "end": 6
+    },
+    "b": {
+      "file": "literal_difference/b.ts",
+      "start": 1,
+      "end": 6
+    }
+  },
+  {
+    "id": "operator_difference",
+    "split": "dev",
+    "actionable": false,
+    "a": {
+      "file": "operator_difference/a.ts",
+      "start": 1,
+      "end": 5
+    },
+    "b": {
+      "file": "operator_difference/b.ts",
+      "start": 1,
+      "end": 5
+    }
+  },
+  {
+    "id": "property_difference",
+    "split": "holdout",
+    "actionable": false,
+    "a": {
+      "file": "property_difference/a.ts",
+      "start": 1,
+      "end": 5
+    },
+    "b": {
+      "file": "property_difference/b.ts",
+      "start": 1,
+      "end": 5
+    }
+  },
+  {
+    "id": "class_field",
+    "split": "holdout",
+    "actionable": true,
+    "a": {
+      "file": "class_field/a.ts",
+      "start": 2,
+      "end": 6
+    },
+    "b": {
+      "file": "class_field/b.ts",
+      "start": 2,
+      "end": 6
+    }
+  },
+  {
+    "id": "renamed_parameters",
+    "split": "holdout",
+    "actionable": true,
+    "a": {
+      "file": "renamed_parameters/a.ts",
+      "start": 1,
+      "end": 7
+    },
+    "b": {
+      "file": "renamed_parameters/b.ts",
+      "start": 1,
+      "end": 7
+    }
+  },
+  {
+    "id": "free_call_difference",
+    "split": "holdout",
+    "actionable": false,
+    "a": {
+      "file": "free_call_difference/a.ts",
+      "start": 1,
+      "end": 5
+    },
+    "b": {
+      "file": "free_call_difference/b.ts",
+      "start": 1,
+      "end": 5
+    }
+  },
+  {
+    "id": "subblock_holdout",
+    "split": "holdout",
+    "actionable": true,
+    "a": {
+      "file": "subblock_holdout/a.ts",
+      "start": 1,
+      "end": 8
+    },
+    "b": {
+      "file": "subblock_holdout/b.ts",
+      "start": 1,
+      "end": 8
+    }
+  }
+]

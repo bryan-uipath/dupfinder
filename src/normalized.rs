@@ -65,6 +65,25 @@ pub fn function(callable: Node, src: &str) -> Option<Shape> {
     Some(shape)
 }
 
+/// Window-local declarations may be renamed; names supplied by the enclosing scope stay literal.
+pub fn statements(nodes: &[Node], src: &str) -> Option<Shape> {
+    let mut bindings = Vec::new();
+    for &node in nodes {
+        if node.has_error() {
+            return None;
+        }
+        declarations(node, src, &mut bindings)?;
+    }
+    let mut shape = Shape {
+        tokens: Vec::new(),
+        leaves: 0,
+    };
+    for &node in nodes {
+        emit(node, src, &bindings, &mut shape);
+    }
+    Some(shape)
+}
+
 struct Binding<'a> {
     name: &'a str,
     scope: Range<usize>,

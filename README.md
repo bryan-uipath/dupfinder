@@ -101,3 +101,9 @@ classes inside functions, `var`, and direct `eval`. Rust/Functor remain supporte
 by names/index and the available token-clone backend, not this detector.
 `--include-tests`, repeatable `--exclude`, and `--json` support scoped experiments.
 The token minimum counts AST leaves, excluding comments and semicolons.
+
+### Statement blocks
+
+`dupfinder blocks . --json` finds repeated windows of three adjacent TS/JS statements (20 tokens minimum). It can find a shared middle section even when the surrounding functions differ. Window-local bindings are normalized; enclosing names, properties, literals, and operators stay literal. Unsupported scopes use the same conservative abstention as bodies. Nested statement blocks are scanned independently, including anonymous callbacks.
+
+`--min-tokens`, `--top`, `--include-tests`, and repeated `--exclude` control output. Long duplicates can yield overlapping windows; these are evidence fragments, not separate cleanup tasks. Switch-case lists and regions with fewer than three statements are outside this detector's scope.

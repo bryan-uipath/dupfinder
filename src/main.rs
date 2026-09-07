@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 mod clones;
 mod normalized;
 mod bodies;
+mod blocks;
 mod extract;
 mod gitdiff;
 mod names;
@@ -43,6 +44,21 @@ enum Cmd {
         #[arg(default_value = ".")]
         path: PathBuf,
         #[arg(long, default_value_t = 30)]
+        min_tokens: usize,
+        #[arg(long, default_value_t = 40)]
+        top: usize,
+        #[arg(long)]
+        include_tests: bool,
+        #[arg(long = "exclude")]
+        excludes: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Match repeated windows of three adjacent TypeScript/JavaScript statements
+    Blocks {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long, default_value_t = 20)]
         min_tokens: usize,
         #[arg(long, default_value_t = 40)]
         top: usize,
@@ -115,7 +131,7 @@ fn main() -> Result<()> {
         Cmd::Index { path, private, out } => cmd_index(&path, private, out),
         Cmd::Clones { path } => cmd_clones(&path),
         Cmd::Bodies { path, min_tokens, top, include_tests, excludes, json } => {
-            let mut ex = extract::extract_structural(&path)?;
+            let mut ex = extract::extract_structural(&path, true, false)?;
             let globs = build_globs(&excludes)?;
             ex.fns.retain(|r| !globs.is_match(&r.file));
             let (total, pairs) = bodies::pairs(&ex, min_tokens, include_tests, top);
@@ -131,6 +147,26 @@ fn main() -> Result<()> {
                 for pair in pairs.iter().take(top) {
                     println!("{}:{}-{} <-> {}:{}-{} ({} tokens)", pair.a.file, pair.a.start, pair.a.end,
                              pair.b.file, pair.b.start, pair.b.end, pair.tokens);
+                }
+            }
+            Ok(())
+        }
+        Cmd::Blocks { path, min_tokens, top, include_tests, excludes, json } => {
+            let mut ex = extract::extract_structural(&path, false, true)?;
+            let globs = build_globs(&excludes)?;
+            ex.blocks.retain(|r| !globs.is_match(&r.file));
+            let (total, pairs) = blocks::pairs(&ex.blocks, min_tokens, include_tests, top);
+            if json {
+                let output: Vec<_> = pairs.iter().take(top).map(|p| serde_json::json!({
+                    "a": blocks::location(p.a), "b": blocks::location(p.b),
+                    "tokens": p.a.shape.leaves, "evidence": ["block"]
+                })).collect();
+                println!("{}", serde_json::json!({"total_pairs": total, "pairs": output}));
+            } else {
+                println!("# statement blocks ({} pairs)\n", total);
+                for p in pairs.iter().take(top) {
+                    println!("{}:{}-{} <-> {}:{}-{} ({} tokens)", p.a.file, p.a.start, p.a.end,
+                             p.b.file, p.b.start, p.b.end, p.a.shape.leaves);
                 }
             }
             Ok(())
